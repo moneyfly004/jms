@@ -29,6 +29,7 @@ jobs:
         GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
         GIST_ID: ${{ secrets.GIST_ID }}
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        SUB_GIST_ID: ${{ secrets.SUB_GIST_ID }}
         MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '10' }}
         TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '10' }}
         SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
@@ -42,25 +43,37 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         
-        # 检查文件是否存在
-        if [ ! -f nodes.txt ]; then
-          echo "❌ nodes.txt 文件不存在"
-          exit 1
+        # 检查并提交 nodes.txt
+        if [ -f nodes.txt ]; then
+          node_count=$(wc -l < nodes.txt | tr -d ' ')
+          echo "📊 nodes.txt 包含 $node_count 个节点"
+          git add nodes.txt
+        else
+          echo "⚠️ nodes.txt 文件不存在"
         fi
         
-        # 显示文件信息
-        node_count=$(wc -l < nodes.txt | tr -d ' ')
-        echo "📊 nodes.txt 包含 $node_count 个节点"
-        
-        # 添加文件并检查变化
-        git add nodes.txt
+        # 检查并提交 sub.txt
+        if [ -f sub.txt ]; then
+          sub_count=$(wc -l < sub.txt | tr -d ' ')
+          echo "📊 sub.txt 包含 $sub_count 个订阅节点"
+          git add sub.txt
+        else
+          echo "⚠️ sub.txt 文件不存在"
+        fi
         
         # 检查是否有未提交的更改
         if git diff --staged --quiet; then
           echo "ℹ️ 没有新的节点更新（文件内容未变化）"
         else
           echo "✅ 检测到节点更新，准备提交..."
-          git commit -m "自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')] - $node_count 个节点"
+          commit_msg="自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')]"
+          if [ -f nodes.txt ]; then
+            commit_msg="$commit_msg - nodes: $node_count"
+          fi
+          if [ -f sub.txt ]; then
+            commit_msg="$commit_msg - sub: $sub_count"
+          fi
+          git commit -m "$commit_msg"
           git push
           echo "✅ 已成功推送到 GitHub"
         fi

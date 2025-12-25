@@ -26,6 +26,8 @@ const (
 var (
 	// 匹配目标链接的正则表达式
 	linkPattern = regexp.MustCompile(`https?://(?:jmssub\.net|jjsubmarines\.com)/members/getsub\.php\?[^\s"']+`)
+	// 匹配订阅链接的正则表达式（包含 /api/v1/client 等）
+	subLinkPattern = regexp.MustCompile(`https?://[^\s"']*/(?:api/v1/client|subscribe|sub|link|clash|v2ray)[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -164,6 +166,376 @@ func (c *Collector) extractLinks(content string) []string {
 		}
 	}
 	return links
+}
+
+// extractSubLinks 提取订阅链接（包含 /api/v1/client 等）
+func (c *Collector) extractSubLinks(content string) []string {
+	matches := subLinkPattern.FindAllString(content, -1)
+	var links []string
+	seenLinks := make(map[string]bool)
+	
+	for _, match := range matches {
+		// 清理链接
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+		
+		// 过滤掉明显不是订阅链接的 URL
+		if link != "" && 
+		   !strings.Contains(link, "github.com") &&
+		   !strings.Contains(link, "raw.githubusercontent.com") &&
+		   !seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+	return links
+}
+
+// SearchSubLinks 搜索订阅链接（从 GitHub 文件中）
+func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索订阅链接关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 只处理 YAML、TXT、JSON 等配置文件
+			if !strings.HasSuffix(item.Path, ".yaml") &&
+			   !strings.HasSuffix(item.Path, ".yml") &&
+			   !strings.HasSuffix(item.Path, ".txt") &&
+			   !strings.HasSuffix(item.Path, ".json") &&
+			   !strings.HasSuffix(item.Path, ".conf") {
+				continue
+			}
+
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 提取订阅链接
+			links := c.extractSubLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新订阅链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// CollectSubNodes 采集订阅链接中的节点
+func (c *Collector) CollectSubNodes() error {
+	// 搜索包含订阅链接的文件
+	keywords := []string{
+		"api/v1/client/subscribe",
+		"sub-urls-remote",
+		"sub-urls:",
+		"subscribe?token",
+		"clash?token",
+		"v2ray?token",
+	}
+	
+	subLinks, err := c.SearchSubLinks(keywords)
+	if err != nil {
+		return fmt.Errorf("搜索订阅链接失败: %v", err)
+	}
+
+	log.Printf("共找到 %d 个订阅链接", len(subLinks))
+
+	// 采集节点
+	var allValidNodes []*ValidNode
+	var allParsedNodes []string
+	seenNodeLinks := make(map[string]bool)
+	var wg sync.WaitGroup
+	resultsChan := make(chan *NodeResult, len(subLinks))
+
+	// 并发采集
+	maxConcurrency := 10
+	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
+		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
+			maxConcurrency = n
+		}
+	}
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	for _, link := range subLinks {
+		wg.Add(1)
+		go func(l string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			result := &NodeResult{Link: l}
+
+			// 获取订阅内容
+			content, err := c.FetchSubscription(l)
+			if err != nil {
+				result.Error = err
+				resultsChan <- result
+				return
+			}
+
+			// 解析节点
+			nodes, err := c.ParseNodes(content)
+			if err != nil {
+				log.Printf("订阅链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
+				nodes = c.extractNodesFromRawContent(content)
+				if len(nodes) == 0 {
+					result.Error = err
+					resultsChan <- result
+					return
+				}
+				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
+			}
+
+			result.Nodes = nodes
+			log.Printf("订阅链接 %s 解析出 %d 个节点", l, len(nodes))
+
+			// 测试节点
+			for _, nodeLink := range nodes {
+				// 全局去重
+				if seenNodeLinks[nodeLink] {
+					continue
+				}
+				seenNodeLinks[nodeLink] = true
+				allParsedNodes = append(allParsedNodes, nodeLink)
+				
+				validNode := c.TestNode(nodeLink)
+				if validNode.Error == nil {
+					result.ValidNodes = append(result.ValidNodes, validNode)
+					allValidNodes = append(allValidNodes, validNode)
+				}
+			}
+
+			resultsChan <- result
+		}(link)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// 收集结果并统计
+	typeStats := make(map[string]int)
+	validTypeStats := make(map[string]int)
+	totalNodes := 0
+	totalValidNodes := 0
+	
+	for result := range resultsChan {
+		if result.Error != nil {
+			log.Printf("订阅链接 %s 处理失败: %v", result.Link, result.Error)
+		} else {
+			totalNodes += len(result.Nodes)
+			totalValidNodes += len(result.ValidNodes)
+			
+			// 统计节点类型
+			for _, nodeLink := range result.Nodes {
+				if node, err := ParseNodeLink(nodeLink); err == nil {
+					typeStats[node.Type]++
+				}
+			}
+			
+			// 统计测试结果
+			for _, validNode := range result.ValidNodes {
+				if validNode.Type != "" && validNode.Error == nil {
+					validTypeStats[validNode.Type]++
+				}
+			}
+			
+			log.Printf("订阅链接 %s: 共 %d 个节点，%d 个可用",
+				result.Link, len(result.Nodes), len(result.ValidNodes))
+		}
+	}
+
+	log.Printf("订阅节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(allValidNodes))
+	if len(typeStats) > 0 {
+		log.Printf("解析出的节点类型统计:")
+		for nodeType, count := range typeStats {
+			validCount := validTypeStats[nodeType]
+			log.Printf("  %s: 共 %d 个 (可用: %d)", nodeType, count, validCount)
+		}
+	}
+
+	// 保存结果到 sub.txt
+	log.Printf("保存订阅节点到 sub.txt（共 %d 个可用节点）", len(allValidNodes))
+	return c.SaveSubResults(allValidNodes)
+}
+
+// SaveSubResults 保存订阅节点结果到 sub.txt
+func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
+	// 创建输出文件
+	outputFile := "sub.txt"
+	file, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("创建文件失败: %v", err)
+	}
+	defer file.Close()
+
+	// 写入节点
+	for _, node := range nodes {
+		file.WriteString(node.Link + "\n")
+	}
+
+	log.Printf("结果已保存到 %s，共 %d 个节点", outputFile, len(nodes))
+
+	// 优先推送到 Gist（使用 SUB_GIST_ID）
+	subGistID := os.Getenv("SUB_GIST_ID")
+	gistToken := os.Getenv("GIST_TOKEN")
+	if gistToken == "" {
+		gistToken = c.githubToken
+	}
+	
+	if subGistID != "" || gistToken != "" {
+		log.Printf("准备推送到订阅 Gist (ID: %s)...", subGistID)
+		if err := c.PushToSubGist(outputFile, nodes, subGistID, gistToken); err != nil {
+			log.Printf("❌ 推送到订阅 Gist 失败: %v", err)
+		} else {
+			log.Printf("✅ 订阅 Gist 推送成功，本地文件已保存到 %s", outputFile)
+			return nil
+		}
+	}
+
+	return nil
+}
+
+// PushToSubGist 推送订阅节点到 GitHub Gist
+func (c *Collector) PushToSubGist(filePath string, nodes []*ValidNode, gistID, gistToken string) error {
+	if gistToken == "" {
+		return fmt.Errorf("需要 GIST_TOKEN 或 GITHUB_TOKEN 才能推送到 Gist")
+	}
+
+	// 读取文件内容
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("读取文件失败: %v", err)
+	}
+	
+	contentStr := string(content)
+	fileNodeCount := len(strings.Split(strings.TrimSpace(contentStr), "\n"))
+	if strings.TrimSpace(contentStr) == "" {
+		fileNodeCount = 0
+	}
+	
+	log.Printf("📄 读取文件 %s，包含 %d 行节点", filePath, fileNodeCount)
+	log.Printf("📊 准备推送 %d 个节点到订阅 Gist", len(nodes))
+
+	// 准备 Gist 内容
+	files := map[string]interface{}{
+		"sub.txt": map[string]string{
+			"content": contentStr,
+		},
+	}
+
+	payload := map[string]interface{}{
+		"description": fmt.Sprintf("JMS 订阅节点列表 - %d 个节点", len(nodes)),
+		"public":      true,
+		"files":       files,
+	}
+
+	var apiURL string
+	if gistID == "" {
+		// 创建新的 Gist
+		apiURL = "https://api.github.com/gists"
+	} else {
+		// 更新现有的 Gist
+		apiURL = fmt.Sprintf("https://api.github.com/gists/%s", gistID)
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("JSON 编码失败: %v", err)
+	}
+
+	// 创建请求
+	method := "POST"
+	if gistID != "" {
+		method = "PATCH"
+	}
+
+	req, err := http.NewRequest(method, apiURL, strings.NewReader(string(jsonData)))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+gistToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	// 发送请求
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		log.Printf("❌ Gist API 响应错误: HTTP %d", resp.StatusCode)
+		log.Printf("响应内容: %s", string(body))
+		return fmt.Errorf("推送失败 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	// 解析响应获取 Gist ID
+	var gistResponse struct {
+		ID  string `json:"id"`
+		URL string `json:"html_url"`
+		Files map[string]struct {
+			RawURL string `json:"raw_url"`
+		} `json:"files"`
+	}
+
+	if err := json.Unmarshal(body, &gistResponse); err == nil {
+		if gistResponse.ID != "" && gistID == "" {
+			log.Printf("✅ 订阅 Gist 已创建，ID: %s", gistResponse.ID)
+			log.Printf("📝 请设置环境变量 SUB_GIST_ID=%s 以便后续更新", gistResponse.ID)
+		} else if gistID != "" {
+			log.Printf("✅ 订阅 Gist 已更新，ID: %s", gistID)
+		}
+		
+		if gistResponse.Files != nil && gistResponse.Files["sub.txt"].RawURL != "" {
+			log.Printf("🔗 订阅地址: %s", gistResponse.Files["sub.txt"].RawURL)
+		}
+		
+		if gistResponse.URL != "" {
+			log.Printf("🌐 Gist 页面: %s", gistResponse.URL)
+		}
+		
+		// 验证推送的节点数量
+		if len(nodes) > 0 {
+			log.Printf("📊 已推送 %d 个节点到订阅 Gist", len(nodes))
+		}
+	} else {
+		log.Printf("⚠️ 无法解析 Gist 响应，但推送可能已成功")
+	}
+
+	log.Printf("✅ 已成功推送到订阅 GitHub Gist")
+	return nil
 }
 
 // extractNodesFromRawContent 从原始内容中提取节点链接（不进行 base64 解码）
@@ -681,7 +1053,22 @@ func main() {
 	}
 
 	collector := NewCollector(githubToken)
+	
+	// 采集 JMS 节点（生成 nodes.txt）
+	log.Println("========== 开始采集 JMS 节点 ==========")
 	if err := collector.Collect(); err != nil {
-		log.Fatalf("采集失败: %v", err)
+		log.Printf("JMS 节点采集失败: %v", err)
+	} else {
+		log.Println("========== JMS 节点采集完成 ==========")
 	}
+	
+	// 采集订阅链接中的节点（生成 sub.txt）
+	log.Println("========== 开始采集订阅链接节点 ==========")
+	if err := collector.CollectSubNodes(); err != nil {
+		log.Printf("订阅节点采集失败: %v", err)
+	} else {
+		log.Println("========== 订阅节点采集完成 ==========")
+	}
+	
+	log.Println("========== 所有采集任务完成 ==========")
 }
