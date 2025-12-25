@@ -1225,6 +1225,12 @@ func (c *Collector) PushToGitHub(filePath string, nodes []*ValidNode) error {
 }
 
 func main() {
+	// 如果设置了 TEST_GLADOS 环境变量，运行 glados 测试
+	if os.Getenv("TEST_GLADOS") == "true" {
+		testGlados()
+		return
+	}
+
 	// 如果设置了 TEST_SINGBOX_NODES 环境变量，运行测试模式
 	// 注意：测试功能在 test_singbox.go 中，需要单独编译运行
 	if os.Getenv("TEST_SINGBOX_NODES") == "true" {

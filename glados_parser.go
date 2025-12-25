@@ -19,23 +19,25 @@ type ClashConfig struct {
 
 // ClashProxy Clash 代理节点结构
 type ClashProxy struct {
-	Name     string                 `yaml:"name"`
-	Type     string                 `yaml:"type"`
-	Server   string                 `yaml:"server"`
-	Port     interface{}            `yaml:"port"` // 可能是 int 或 string
-	UUID     string                 `yaml:"uuid"`
-	Password string                 `yaml:"password"`
-	Cipher   string                 `yaml:"cipher"`
-	Network  string                 `yaml:"network"`
-	TLS      bool                   `yaml:"tls"`
-	SNI      string                 `yaml:"sni"`
-	ALPN     []string               `yaml:"alpn"`
-	UDP      bool                   `yaml:"udp"`
-	Flow     string                 `yaml:"flow"`
-	WSOpts   map[string]interface{} `yaml:"ws-opts"`
-	GrpcOpts map[string]interface{} `yaml:"grpc-opts"`
-	Reality  map[string]interface{} `yaml:"reality-opts"`
-	Other    map[string]interface{} `yaml:",inline"`
+	Name       string                 `yaml:"name"`
+	Type       string                 `yaml:"type"`
+	Server     string                 `yaml:"server"`
+	Port       interface{}            `yaml:"port"` // 可能是 int 或 string
+	UUID       string                 `yaml:"uuid"`
+	Password   string                 `yaml:"password"`
+	Cipher     string                 `yaml:"cipher"`
+	Network    string                 `yaml:"network"`
+	TLS        bool                   `yaml:"tls"`
+	SNI        string                 `yaml:"sni"`
+	ALPN       []string               `yaml:"alpn"`
+	UDP        bool                   `yaml:"udp"`
+	Flow       string                 `yaml:"flow"`
+	Plugin     string                 `yaml:"plugin"`     // SS 插件名称（如 obfs）
+	PluginOpts map[string]interface{} `yaml:"plugin-opts"` // SS 插件选项
+	WSOpts     map[string]interface{} `yaml:"ws-opts"`
+	GrpcOpts   map[string]interface{} `yaml:"grpc-opts"`
+	Reality    map[string]interface{} `yaml:"reality-opts"`
+	Other      map[string]interface{} `yaml:",inline"`
 }
 
 // ParseGladosLink 解析 glados 链接并提取节点
@@ -151,11 +153,41 @@ func (c *Collector) convertClashSSToLink(proxy ClashProxy, port int) string {
 		return ""
 	}
 
-	// 构建 SS 链接: ss://base64(method:password)@server:port#name
+	// 构建 SS 链接: ss://base64(method:password)@server:port?plugin=...#name
 	auth := fmt.Sprintf("%s:%s", proxy.Cipher, proxy.Password)
 	authBase64 := base64.StdEncoding.EncodeToString([]byte(auth))
 	
 	link := fmt.Sprintf("ss://%s@%s:%d", authBase64, proxy.Server, port)
+	
+	// 处理插件（如 obfs）
+	if proxy.Plugin != "" && proxy.PluginOpts != nil {
+		var pluginParts []string
+		
+		// obfs 插件处理
+		if proxy.Plugin == "obfs" {
+			pluginParts = append(pluginParts, "obfs-local")
+			
+			// 获取 mode (tls/http)
+			if mode, ok := proxy.PluginOpts["mode"].(string); ok && mode != "" {
+				pluginParts = append(pluginParts, "obfs="+mode)
+			}
+			
+			// 获取 host
+			if host, ok := proxy.PluginOpts["host"].(string); ok && host != "" {
+				pluginParts = append(pluginParts, "obfs-host="+host)
+			}
+		} else {
+			// 其他插件
+			pluginParts = append(pluginParts, proxy.Plugin)
+			// 可以在这里添加其他插件的处理逻辑
+		}
+		
+		if len(pluginParts) > 0 {
+			pluginStr := strings.Join(pluginParts, ";")
+			link += "?plugin=" + url.QueryEscape(pluginStr)
+		}
+	}
+	
 	if proxy.Name != "" {
 		link += "#" + url.QueryEscape(proxy.Name)
 	}
