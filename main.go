@@ -623,9 +623,24 @@ func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
 		}
 	}
 
-	// 添加新节点
+	// 添加新节点（只添加测试成功且没有超时的节点）
 	for _, node := range nodes {
-		if node.Error == nil && !seenNodes[node.Link] {
+		// 检查节点是否有错误，包括超时错误
+		if node.Error != nil {
+			// 检查是否是超时错误
+			errorStr := node.Error.Error()
+			if strings.Contains(errorStr, "timeout") ||
+				strings.Contains(errorStr, "deadline exceeded") ||
+				strings.Contains(errorStr, "超时") {
+				log.Printf("⚠️ 跳过超时节点: %s", node.Link)
+				continue
+			}
+			// 其他错误也跳过
+			continue
+		}
+		
+		// 只保存没有错误的节点
+		if !seenNodes[node.Link] {
 			seenNodes[node.Link] = true
 			allNodes = append(allNodes, node.Link)
 		}
