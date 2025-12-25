@@ -29,6 +29,8 @@ var (
 	linkPattern = regexp.MustCompile(`https?://(?:jmssub\.net|jjsubmarines\.com)/members/getsub\.php\?[^\s"']+`)
 	// 匹配订阅链接的正则表达式（包含 /api/v1/client 等）
 	subLinkPattern = regexp.MustCompile(`https?://[^\s"']*/(?:api/v1/client|subscribe|sub|link|clash|v2ray)[^\s"']*`)
+	// 匹配 glados 链接的正则表达式
+	gladosLinkPattern = regexp.MustCompile(`https?://update\.glados-config\.com/(?:singbox|clash)/[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -203,7 +205,7 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 
 	// 存储所有文件项及其更新时间，用于排序
 	type fileItemWithTime struct {
-		Item        struct {
+		Item struct {
 			HTMLURL string `json:"html_url"`
 			APIURL  string `json:"url"`
 			Path    string `json:"path"`
@@ -292,9 +294,9 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 			if !seenLinks[link] {
 				seenLinks[link] = true
 				allLinks = append(allLinks, link)
-				log.Printf("发现新订阅链接 [%d/%d] (更新时间: %s): %s", 
-					len(allLinks), maxLinks, 
-					fileItem.UpdatedTime.Format("2006-01-02 15:04:05"), 
+				log.Printf("发现新订阅链接 [%d/%d] (更新时间: %s): %s",
+					len(allLinks), maxLinks,
+					fileItem.UpdatedTime.Format("2006-01-02 15:04:05"),
 					link)
 			}
 		}
@@ -322,6 +324,7 @@ func (c *Collector) CollectSubNodes() error {
 		"subscribe?token",
 		"clash?token",
 		"v2ray?token",
+		"update.glados", // 添加 glados 关键词
 	}
 
 	subLinks, err := c.SearchSubLinks(keywords)
@@ -376,29 +379,47 @@ func (c *Collector) CollectSubNodes() error {
 			}
 			mu.Unlock()
 
-			// 获取订阅内容
-			content, err := c.FetchSubscription(l)
-			if err != nil {
-				result.Error = err
-				resultsChan <- result
-				return
-			}
+			// 声明 nodes 变量
+			var nodes []string
+			var err error
 
-			// 解析节点
-			nodes, err := c.ParseNodes(content)
-			if err != nil {
-				log.Printf("订阅链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
-				nodes = c.extractNodesFromRawContent(content)
-				if len(nodes) == 0 {
+			// 检查是否是 glados 链接
+			if strings.Contains(l, "update.glados-config.com") {
+				// 解析 glados 链接
+				nodes, err = c.ParseGladosLink(l)
+				if err != nil {
+					log.Printf("glados 链接 %s 解析失败: %v", l, err)
 					result.Error = err
 					resultsChan <- result
 					return
 				}
-				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
-			}
+				result.Nodes = nodes
+				log.Printf("glados 链接 %s 解析出 %d 个节点", l, len(nodes))
+			} else {
+				// 获取订阅内容
+				content, err := c.FetchSubscription(l)
+				if err != nil {
+					result.Error = err
+					resultsChan <- result
+					return
+				}
 
-			result.Nodes = nodes
-			log.Printf("订阅链接 %s 解析出 %d 个节点", l, len(nodes))
+				// 解析节点
+				nodes, err = c.ParseNodes(content)
+				if err != nil {
+					log.Printf("订阅链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
+					nodes = c.extractNodesFromRawContent(content)
+					if len(nodes) == 0 {
+						result.Error = err
+						resultsChan <- result
+						return
+					}
+					log.Printf("从原始内容提取到 %d 个节点", len(nodes))
+				}
+
+				result.Nodes = nodes
+				log.Printf("订阅链接 %s 解析出 %d 个节点", l, len(nodes))
+			}
 
 			// 测试节点
 			for _, nodeLink := range nodes {
