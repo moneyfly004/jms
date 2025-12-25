@@ -36,16 +36,49 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 		return c.TestNode(nodeLink)
 	}
 
-	// 检查 sing-box 是否可用
+	// 查找 sing-box 可执行文件
 	singBoxPath := os.Getenv("SINGBOX_PATH")
 	if singBoxPath == "" {
-		singBoxPath = "sing-box" // 默认路径
+		// 优先使用本地目录中的 sing-box
+		localPaths := []string{
+			"./sing-box-1.10.0-alpha.29-darwin-amd64/sing-box",  // macOS arm64
+			"./sing-box-1.10.0-alpha.29-linux-amd64/sing-box",    // Linux amd64
+			"./sing-box-1.10.0-alpha.29-darwin-arm64/sing-box",  // macOS arm64
+			"./sing-box",  // 当前目录
+			"sing-box",    // PATH 中
+		}
+		
+		for _, path := range localPaths {
+			if _, err := os.Stat(path); err == nil {
+				singBoxPath = path
+				break
+			}
+		}
+		
+		// 如果本地文件都不存在，尝试从 PATH 查找
+		if singBoxPath == "" {
+			if path, err := exec.LookPath("sing-box"); err == nil {
+				singBoxPath = path
+			}
+		}
 	}
 
 	// 检查 sing-box 是否存在
-	if _, err := exec.LookPath(singBoxPath); err != nil {
-		log.Printf("⚠️ sing-box 未找到，回退到 TCP 测试")
-		return c.TestNode(nodeLink)
+	if singBoxPath == "" {
+		return &ValidNode{
+			Link:  nodeLink,
+			Type:  node.Type,
+			Error: fmt.Errorf("sing-box 未找到，请确保 sing-box 内核文件在项目目录中"),
+		}
+	}
+	
+	// 检查文件是否可执行
+	if _, err := os.Stat(singBoxPath); os.IsNotExist(err) {
+		return &ValidNode{
+			Link:  nodeLink,
+			Type:  node.Type,
+			Error: fmt.Errorf("sing-box 文件不存在: %s", singBoxPath),
+		}
 	}
 
 	// 创建临时配置文件
@@ -325,7 +358,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 
 	// 为 outbound 添加 tag
 	outbound["tag"] = "proxy"
-	
+
 	// 创建完整配置
 	config := map[string]interface{}{
 		"log": map[string]interface{}{
@@ -427,7 +460,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("启动 sing-box 失败: %v", err)
 	}
-	
+
 	// 确保进程被清理
 	defer func() {
 		if cmd.Process != nil {
@@ -450,7 +483,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		time.Sleep(waitInterval)
 		waited += waitInterval
 	}
-	
+
 	if waited >= maxWait {
 		return 0, fmt.Errorf("sing-box 启动超时，端口 %d 未就绪", port)
 	}
@@ -479,7 +512,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 			timeout = seconds
 		}
 	}
-	
+
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   timeout,

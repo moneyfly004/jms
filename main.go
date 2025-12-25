@@ -379,13 +379,14 @@ func (c *Collector) CollectSubNodes() error {
 
 				allParsedNodes = append(allParsedNodes, nodeLink)
 
-				// 根据环境变量选择测试方式（默认启用 sing-box）
+				// 默认使用 sing-box 进行真实链接测速
 				var validNode *ValidNode
 				useSingBox := os.Getenv("USE_SINGBOX")
 				if useSingBox == "false" {
+					// 只有明确禁用时才使用 TCP 测试
 					validNode = c.TestNode(nodeLink)
 				} else {
-					// 默认使用 sing-box，如果不可用则回退到 TCP
+					// 默认使用 sing-box 进行真实链接测速
 					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
 				if validNode.Error == nil {
@@ -894,13 +895,14 @@ func (c *Collector) Collect() error {
 				seenNodeLinks[nodeLink] = true
 				allParsedNodes = append(allParsedNodes, nodeLink)
 
-				// 根据环境变量选择测试方式（默认启用 sing-box）
+				// 默认使用 sing-box 进行真实链接测速
 				var validNode *ValidNode
 				useSingBox := os.Getenv("USE_SINGBOX")
 				if useSingBox == "false" {
+					// 只有明确禁用时才使用 TCP 测试
 					validNode = c.TestNode(nodeLink)
 				} else {
-					// 默认使用 sing-box，如果不可用则回退到 TCP
+					// 默认使用 sing-box 进行真实链接测速
 					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
 				if validNode.Error == nil {
@@ -1137,6 +1139,12 @@ func (c *Collector) PushToGitHub(filePath string, nodes []*ValidNode) error {
 }
 
 func main() {
+	// 如果设置了 TEST_SINGBOX_NODES 环境变量，运行测试模式
+	if os.Getenv("TEST_SINGBOX_NODES") == "true" {
+		testSingBoxNodes()
+		return
+	}
+
 	// 从环境变量获取 GitHub token（可选）
 	githubToken := os.Getenv("GITHUB_TOKEN")
 	if githubToken == "" {

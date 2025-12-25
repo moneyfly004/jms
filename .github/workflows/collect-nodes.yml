@@ -23,20 +23,27 @@ jobs:
       with:
         go-version: '1.21'
         
-    - name: 安装 Sing-box（默认启用）
+    - name: 检查 Sing-box 内核
       if: env.USE_SINGBOX != 'false'
       run: |
-        echo "📥 开始下载 sing-box 内核..."
-        SINGBOX_VERSION="1.10.0-alpha.29"
-        ARCH="amd64"
-        DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz"
-        echo "下载地址: ${DOWNLOAD_URL}"
-        curl -Lo sing-box.tar.gz "${DOWNLOAD_URL}"
-        tar -xzf sing-box.tar.gz
-        chmod +x sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box
-        sudo mv sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box /usr/local/bin/sing-box
-        echo "✅ sing-box 安装完成"
-        sing-box version
+        echo "🔍 检查 sing-box 内核文件..."
+        if [ -f "./sing-box-1.10.0-alpha.29-linux-amd64/sing-box" ]; then
+          chmod +x ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
+          echo "✅ 找到本地 sing-box 内核"
+          ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box version
+        else
+          echo "⚠️ 未找到本地 sing-box 内核，尝试下载..."
+          SINGBOX_VERSION="1.10.0-alpha.29"
+          ARCH="amd64"
+          DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz"
+          curl -Lo sing-box.tar.gz "${DOWNLOAD_URL}"
+          tar -xzf sing-box.tar.gz
+          chmod +x sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box
+          echo "✅ sing-box 下载完成"
+          ./sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box version
+        fi
+      env:
+        USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
         
     - name: 运行采集程序
       env:
@@ -50,7 +57,7 @@ jobs:
         SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
         USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
         TEST_SPEED: ${{ secrets.TEST_SPEED || 'false' }}
-        SINGBOX_PATH: /usr/local/bin/sing-box
+        SINGBOX_PATH: ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
       run: |
         go run main.go config.go node_parser.go gist.go singbox.go
         
