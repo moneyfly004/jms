@@ -193,14 +193,18 @@ func (c *Collector) extractSubLinks(content string) []string {
 		}
 	}
 
-	// 提取 glados 链接
+	// 提取 glados 链接（只提取 singbox 和 clash 两种类型）
 	gladosMatches := gladosLinkPattern.FindAllString(content, -1)
 	for _, match := range gladosMatches {
 		link := strings.TrimSpace(match)
 		link = strings.TrimRight(link, ".,;!?)")
 		link = strings.TrimRight(link, "\"')")
 
-		if link != "" && !seenLinks[link] {
+		// 只保留 singbox 和 clash 两种类型的链接
+		if link != "" &&
+			(strings.Contains(link, "update.glados-config.com/singbox/") ||
+				strings.Contains(link, "update.glados-config.com/clash/")) &&
+			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
 		}

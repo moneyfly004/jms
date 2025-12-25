@@ -21,10 +21,14 @@ func (c *Collector) CollectGladosNodes() error {
 		return fmt.Errorf("搜索 glados 链接失败: %v", err)
 	}
 
-	// 过滤出 glados 链接
+	// 只保留两种特定类型的 glados 链接
 	var filteredLinks []string
 	for _, link := range gladosLinks {
-		if strings.Contains(link, "update.glados-config.com") {
+		// 只采集这两种格式：
+		// 1. https://update.glados-config.com/singbox/...
+		// 2. https://update.glados-config.com/clash/...
+		if strings.Contains(link, "update.glados-config.com/singbox/") ||
+			strings.Contains(link, "update.glados-config.com/clash/") {
 			filteredLinks = append(filteredLinks, link)
 		}
 	}
