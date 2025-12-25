@@ -638,7 +638,7 @@ func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
 			// 其他错误也跳过
 			continue
 		}
-		
+
 		// 只保存没有错误的节点
 		if !seenNodes[node.Link] {
 			seenNodes[node.Link] = true
