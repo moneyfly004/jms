@@ -555,12 +555,13 @@ func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
 	}
 
 	// 写入文件
+	outputFile := "sub.txt"
 	content := strings.Join(allNodes, "\n")
-	if err := os.WriteFile("sub.txt", []byte(content), 0644); err != nil {
+	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
 		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
-	log.Printf("结果已保存到 %s，共 %d 个节点", outputFile, len(nodes))
+	log.Printf("结果已保存到 %s，共 %d 个节点（包含现有节点）", outputFile, len(allNodes))
 
 	// 优先推送到 Gist（使用 SUB_GIST_ID）
 	subGistID := os.Getenv("SUB_GIST_ID")
