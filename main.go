@@ -40,6 +40,7 @@ type GitHubSearchResult struct {
 		Repo    struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
+		UpdatedAt string `json:"updated_at"` // 文件更新时间
 	} `json:"items"`
 }
 
@@ -192,16 +193,22 @@ func (c *Collector) extractSubLinks(content string) []string {
 	return links
 }
 
-// SearchSubLinks 搜索订阅链接（从 GitHub 文件中）
+// SearchSubLinks 搜索订阅链接（从 GitHub 文件中），限制最多1000个
 func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 	var allLinks []string
 	seenLinks := make(map[string]bool)
+	maxLinks := 1000 // 限制最多1000个订阅链接
 
 	for _, keyword := range keywords {
+		if len(allLinks) >= maxLinks {
+			log.Printf("已达到订阅链接数量限制（%d个），停止搜索", maxLinks)
+			break
+		}
+
 		log.Printf("正在搜索订阅链接关键词: %s", keyword)
 
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+		// GitHub API 搜索代码，按更新时间排序（最新的在前）
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100&sort=indexed&order=desc", GitHubAPIBaseURL, url.QueryEscape(keyword))
 
 		var results GitHubSearchResult
 		if err := c.makeRequest(searchURL, &results); err != nil {
@@ -211,8 +218,12 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 
 		log.Printf("找到 %d 个结果", results.TotalCount)
 
-		// 处理每个结果
+		// 处理每个结果（已按更新时间排序）
 		for _, item := range results.Items {
+			if len(allLinks) >= maxLinks {
+				break
+			}
+
 			// 只处理 YAML、TXT、JSON 等配置文件
 			if !strings.HasSuffix(item.Path, ".yaml") &&
 			   !strings.HasSuffix(item.Path, ".yml") &&
@@ -232,10 +243,13 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 			// 提取订阅链接
 			links := c.extractSubLinks(fileContent)
 			for _, link := range links {
+				if len(allLinks) >= maxLinks {
+					break
+				}
 				if !seenLinks[link] {
 					seenLinks[link] = true
 					allLinks = append(allLinks, link)
-					log.Printf("发现新订阅链接: %s", link)
+					log.Printf("发现新订阅链接 [%d/%d]: %s", len(allLinks), maxLinks, link)
 				}
 			}
 		}
@@ -244,10 +258,19 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 		time.Sleep(2 * time.Second)
 	}
 
-	return allLinks, nil
+	log.Printf("订阅链接搜索完成，共找到 %d 个订阅链接", len(allLinks))
+	return allLinks[:min(len(allLinks), maxLinks)], nil
 }
 
-// CollectSubNodes 采集订阅链接中的节点
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// CollectSubNodes 采集订阅链接中的节点，限制最多200个可用节点
 func (c *Collector) CollectSubNodes() error {
 	// 搜索包含订阅链接的文件
 	keywords := []string{
@@ -264,7 +287,7 @@ func (c *Collector) CollectSubNodes() error {
 		return fmt.Errorf("搜索订阅链接失败: %v", err)
 	}
 
-	log.Printf("共找到 %d 个订阅链接", len(subLinks))
+	log.Printf("共找到 %d 个订阅链接，开始采集节点（目标：200个可用节点）", len(subLinks))
 
 	// 采集节点
 	var allValidNodes []*ValidNode
@@ -272,6 +295,8 @@ func (c *Collector) CollectSubNodes() error {
 	seenNodeLinks := make(map[string]bool)
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(subLinks))
+	maxValidNodes := 200 // 限制最多200个可用节点
+	var mu sync.Mutex // 保护 allValidNodes 的并发访问
 
 	// 并发采集
 	maxConcurrency := 10
@@ -283,6 +308,16 @@ func (c *Collector) CollectSubNodes() error {
 	semaphore := make(chan struct{}, maxConcurrency)
 
 	for _, link := range subLinks {
+		// 检查是否已达到目标节点数
+		mu.Lock()
+		currentCount := len(allValidNodes)
+		mu.Unlock()
+		
+		if currentCount >= maxValidNodes {
+			log.Printf("已达到目标节点数（%d个），停止采集新的订阅链接", maxValidNodes)
+			break
+		}
+
 		wg.Add(1)
 		go func(l string) {
 			defer wg.Done()
@@ -290,6 +325,14 @@ func (c *Collector) CollectSubNodes() error {
 			defer func() { <-semaphore }()
 
 			result := &NodeResult{Link: l}
+
+			// 再次检查是否已达到目标（避免不必要的请求）
+			mu.Lock()
+			if len(allValidNodes) >= maxValidNodes {
+				mu.Unlock()
+				return
+			}
+			mu.Unlock()
 
 			// 获取订阅内容
 			content, err := c.FetchSubscription(l)
@@ -317,17 +360,37 @@ func (c *Collector) CollectSubNodes() error {
 
 			// 测试节点
 			for _, nodeLink := range nodes {
+				// 检查是否已达到目标节点数
+				mu.Lock()
+				if len(allValidNodes) >= maxValidNodes {
+					mu.Unlock()
+					break
+				}
+				mu.Unlock()
+
 				// 全局去重
+				mu.Lock()
 				if seenNodeLinks[nodeLink] {
+					mu.Unlock()
 					continue
 				}
 				seenNodeLinks[nodeLink] = true
+				mu.Unlock()
+				
 				allParsedNodes = append(allParsedNodes, nodeLink)
 				
 				validNode := c.TestNode(nodeLink)
 				if validNode.Error == nil {
-					result.ValidNodes = append(result.ValidNodes, validNode)
-					allValidNodes = append(allValidNodes, validNode)
+					mu.Lock()
+					if len(allValidNodes) < maxValidNodes {
+						result.ValidNodes = append(result.ValidNodes, validNode)
+						allValidNodes = append(allValidNodes, validNode)
+						currentCount := len(allValidNodes)
+						mu.Unlock()
+						log.Printf("✅ 可用节点: %d/%d", currentCount, maxValidNodes)
+					} else {
+						mu.Unlock()
+					}
 				}
 			}
 
@@ -372,7 +435,14 @@ func (c *Collector) CollectSubNodes() error {
 		}
 	}
 
-	log.Printf("订阅节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(allValidNodes))
+	// 限制最终节点数量为200个
+	finalValidNodes := allValidNodes
+	if len(allValidNodes) > 200 {
+		finalValidNodes = allValidNodes[:200]
+		log.Printf("节点数量超过200个，只保留前200个")
+	}
+
+	log.Printf("订阅节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(finalValidNodes))
 	if len(typeStats) > 0 {
 		log.Printf("解析出的节点类型统计:")
 		for nodeType, count := range typeStats {
@@ -382,8 +452,8 @@ func (c *Collector) CollectSubNodes() error {
 	}
 
 	// 保存结果到 sub.txt
-	log.Printf("保存订阅节点到 sub.txt（共 %d 个可用节点）", len(allValidNodes))
-	return c.SaveSubResults(allValidNodes)
+	log.Printf("保存订阅节点到 sub.txt（共 %d 个可用节点）", len(finalValidNodes))
+	return c.SaveSubResults(finalValidNodes)
 }
 
 // SaveSubResults 保存订阅节点结果到 sub.txt
