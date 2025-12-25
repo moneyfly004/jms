@@ -37,7 +37,7 @@
 
 ```bash
 cd jms采集
-go run main.go config.go
+go run main.go config.go node_parser.go
 ```
 
 程序会：
@@ -52,7 +52,7 @@ go run main.go config.go
 
 ```bash
 export GITHUB_TOKEN=your_github_token
-go run main.go config.go
+go run main.go config.go node_parser.go
 ```
 
 ### 推送到 GitHub 仓库
@@ -62,7 +62,7 @@ go run main.go config.go
 ```bash
 export GITHUB_TOKEN=your_github_token
 export GITHUB_REPO=your_username/your_repo
-go run main.go config.go
+go run main.go config.go node_parser.go
 ```
 
 程序会将 `nodes.txt` 推送到指定仓库的根目录。
@@ -81,7 +81,7 @@ export GITHUB_TOKEN=your_token
 export GITHUB_REPO=username/repo
 export MAX_CONCURRENCY=20
 export TEST_TIMEOUT=10
-go run main.go config.go
+go run main.go config.go node_parser.go
 ```
 
 ## 环境变量说明
@@ -167,7 +167,7 @@ vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAi
 crontab -e
 
 # 添加定时任务（每天凌晨 2 点运行）
-0 2 * * * cd /path/to/goweb/jms采集 && /usr/local/go/bin/go run main.go config.go >> /path/to/logs/jms_collector.log 2>&1
+0 2 * * * cd /path/to/goweb/jms采集 && /usr/local/go/bin/go run main.go config.go node_parser.go >> /path/to/logs/jms_collector.log 2>&1
 ```
 
 ### 使用 systemd（Linux）
@@ -185,7 +185,7 @@ User=your_user
 WorkingDirectory=/path/to/goweb/jms采集
 Environment="GITHUB_TOKEN=your_token"
 Environment="GITHUB_REPO=username/repo"
-ExecStart=/usr/local/go/bin/go run main.go config.go
+ExecStart=/usr/local/go/bin/go run main.go config.go node_parser.go
 
 [Install]
 WantedBy=multi-user.target
@@ -240,4 +240,3 @@ sudo systemctl start jms-collector.timer
 ## 许可证
 
 本项目遵循项目主仓库的许可证。
-
