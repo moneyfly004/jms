@@ -23,11 +23,18 @@ jobs:
     - name: 设置 Pages
       uses: actions/configure-pages@v4
       
+    - name: 准备 Pages 内容
+      run: |
+        mkdir -p _site
+        cp nodes.txt _site/
+        echo "# JMS 节点订阅" > _site/index.html
+        echo "<p>订阅地址: <a href='nodes.txt'>nodes.txt</a></p>" >> _site/index.html
+        echo "<p>更新时间: $(date)</p>" >> _site/index.html
+        
     - name: 上传到 Pages
       uses: actions/upload-pages-artifact@v3
       with:
-        path: '.'
-        include-hidden-files: true
+        path: '_site'
         
     - name: 部署到 GitHub Pages
       id: deployment
