@@ -30,7 +30,7 @@ var (
 	// 匹配订阅链接的正则表达式（包含 /api/v1/client 等）
 	subLinkPattern = regexp.MustCompile(`https?://[^\s"']*/(?:api/v1/client|subscribe|sub|link|clash|v2ray)[^\s"']*`)
 	// 匹配 glados 链接的正则表达式
-	gladosLinkPattern = regexp.MustCompile(`https?://update\.glados-config\.com/(?:singbox|clash)/[^\s"']*`)
+	gladosLinkPattern = regexp.MustCompile(`https?://update\.glados-config\.com/(?:singbox|clash|subscribe)/[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
