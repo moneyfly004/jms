@@ -174,17 +174,16 @@ func (c *Collector) extractLinks(content string) []string {
 
 // extractSubLinks 提取订阅链接（包含 /api/v1/client 等）
 func (c *Collector) extractSubLinks(content string) []string {
-	matches := subLinkPattern.FindAllString(content, -1)
 	var links []string
 	seenLinks := make(map[string]bool)
 
+	// 提取标准订阅链接
+	matches := subLinkPattern.FindAllString(content, -1)
 	for _, match := range matches {
-		// 清理链接
 		link := strings.TrimSpace(match)
 		link = strings.TrimRight(link, ".,;!?)")
 		link = strings.TrimRight(link, "\"')")
 
-		// 过滤掉明显不是订阅链接的 URL
 		if link != "" &&
 			!strings.Contains(link, "github.com") &&
 			!strings.Contains(link, "raw.githubusercontent.com") &&
@@ -193,6 +192,20 @@ func (c *Collector) extractSubLinks(content string) []string {
 			links = append(links, link)
 		}
 	}
+
+	// 提取 glados 链接
+	gladosMatches := gladosLinkPattern.FindAllString(content, -1)
+	for _, match := range gladosMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		if link != "" && !seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
 	return links
 }
 
