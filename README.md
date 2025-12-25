@@ -4,11 +4,17 @@
 
 ## 📡 订阅地址
 
+### JMS 节点订阅（nodes.txt）
 ```
 https://gist.githubusercontent.com/moneyfly004/e2b2b5f89928dcb48a62d6394504a324/raw/nodes.txt
 ```
 
-将此地址添加到你的代理客户端（Clash、V2Ray、Shadowsocks 等）即可自动获取最新节点。
+### 订阅链接节点订阅（sub.txt）
+```
+https://gist.githubusercontent.com/moneyfly004/fa0e0bfff22b50d9ca9d92b82ebe2f7c/raw/sub.txt
+```
+
+将这些地址添加到你的代理客户端（Clash、V2Ray、Shadowsocks 等）即可自动获取最新节点。
 
 ## 🚀 快速开始
 
