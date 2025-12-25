@@ -95,6 +95,33 @@ func (c *Collector) parseSingBoxLink(link string) ([]string, error) {
 
 // parseClashLink 解析 Clash YAML 格式的链接
 func (c *Collector) parseClashLink(link string) ([]string, error) {
+	// 首先尝试转换为 v2ray 格式（base64 节点列表）
+	// 例如：https://update.glados-config.com/clash/477901/f18d16d/131560/glados.yaml
+	// 转换为：https://update.glados-config.com/v2ray/477901/f18d16d/131560
+	if strings.Contains(link, "/clash/") && strings.HasSuffix(link, ".yaml") {
+		// 提取路径部分：/clash/477901/f18d16d/131560/glados.yaml
+		// 转换为：/v2ray/477901/f18d16d/131560
+		v2rayLink := strings.Replace(link, "/clash/", "/v2ray/", 1)
+		v2rayLink = strings.TrimSuffix(v2rayLink, "/glados.yaml")
+		
+		log.Printf("尝试 v2ray 格式链接: %s", v2rayLink)
+		
+		// 尝试获取 v2ray 格式内容
+		content, err := c.FetchSubscription(v2rayLink)
+		if err == nil && content != "" {
+			// 尝试解析 base64 节点列表
+			nodes, parseErr := c.ParseNodes(content)
+			if parseErr == nil && len(nodes) > 0 {
+				log.Printf("✅ 从 v2ray 格式链接中提取到 %d 个节点", len(nodes))
+				return nodes, nil
+			}
+			log.Printf("⚠️ v2ray 格式链接解析失败，回退到 Clash YAML 解析")
+		} else {
+			log.Printf("⚠️ v2ray 格式链接获取失败，使用 Clash YAML 解析")
+		}
+	}
+
+	// 回退到原来的 Clash YAML 解析方式
 	// 获取内容
 	content, err := c.FetchSubscription(link)
 	if err != nil {
@@ -116,7 +143,7 @@ func (c *Collector) parseClashLink(link string) ([]string, error) {
 		}
 	}
 
-	log.Printf("从 Clash 配置中提取到 %d 个节点", len(nodes))
+	log.Printf("从 Clash YAML 配置中提取到 %d 个节点", len(nodes))
 	return nodes, nil
 }
 
