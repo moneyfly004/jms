@@ -2,7 +2,13 @@
 
 自动化采集 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 关键词的代码资源，提取订阅链接，解析节点并进行测速，最终保存可用节点。
 
-订阅地址 https://gist.githubusercontent.com/moneyfly004/e2b2b5f89928dcb48a62d6394504a324/raw/nodes.txt
+## 📡 订阅地址
+
+```
+https://gist.githubusercontent.com/moneyfly004/e2b2b5f89928dcb48a62d6394504a324/raw/nodes.txt
+```
+
+将此地址添加到你的代理客户端（Clash、V2Ray、Shadowsocks 等）即可自动获取最新节点。
 
 ## 🚀 快速开始
 
@@ -434,28 +440,6 @@ https://gist.githubusercontent.com/your_username/{gist_id}/raw/nodes.txt
 https://raw.githubusercontent.com/your_username/your_repo/main/nodes.txt
 ```
 
-### 方式三：GitHub Pages（仅公开仓库，私有仓库不可用）
-
-**⚠️ 重要**：
-- 私有仓库的 GitHub Pages 在免费账户中**不可用**
-- GitHub 免费账户只支持**公开仓库**的 GitHub Pages
-- 私有仓库需要 **GitHub Pro/Team/Enterprise** 账户才能使用 Pages
-- 如果看到 Pages 工作流失败，这是正常的
-
-**如果仓库是公开的，启用 GitHub Pages：**
-
-1. 在仓库设置中启用 Pages
-   - 访问仓库：https://github.com/your_username/your_repo
-   - 点击 **Settings** → **Pages**
-   - 在 **Source** 部分选择 **GitHub Actions** 作为源
-   - 点击 **Save**
-
-2. 订阅地址：
-   ```
-   https://your_username.github.io/your_repo/nodes.txt
-   ```
-
-**对于私有仓库，请使用 Gist 方案（方式一）**
 
 ## 私有仓库支持
 
@@ -545,12 +529,6 @@ https://raw.githubusercontent.com/your_username/your_repo/main/nodes.txt
 - 确认 Gist ID 是否正确
 - 查看日志中的节点数量统计
 
-### 问题: Pages 工作流失败
-
-**解决方案**：
-- 如果仓库是私有的，这是正常的（私有仓库不支持免费 Pages）
-- **使用 Gist 方案**（见上方"订阅节点"部分）
-- 如果仓库是公开的，检查 Pages 设置是否正确
 
 ### 问题: Actions 运行失败：Token 错误
 
