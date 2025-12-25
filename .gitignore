@@ -1,0 +1,18 @@
+# 输出文件
+# nodes.txt  # 注释掉，让 GitHub Actions 可以提交这个文件
+*.log
+
+# 编译文件
+jms-collector
+jms-collector.exe
+
+# 环境变量文件
+.env
+.env.local
+
+# IDE 文件
+.idea/
+.vscode/
+*.swp
+*.swo
+

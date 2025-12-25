@@ -1,0 +1,223 @@
+# JMS 节点采集器
+
+自动化采集 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 关键词的代码资源，提取订阅链接，解析节点并进行测速，最终保存可用节点。
+
+## 功能特性
+
+- 🔍 **GitHub 代码搜索**: 自动搜索包含目标关键词的代码
+- 🔗 **链接提取**: 从搜索结果中提取订阅链接
+- 📦 **节点解析**: 解析 base64 编码的订阅内容，提取 ss 和 vmess 节点
+- ⚡ **节点测速**: 对节点进行 TCP 连通性测试
+- 💾 **结果保存**: 保存可用节点到本地文件
+- 🚀 **GitHub 推送**: 可选地将结果推送到 GitHub 仓库
+
+## 使用方法
+
+### 基本使用（不需要 GitHub Token）
+
+```bash
+cd jms采集
+go run main.go config.go
+```
+
+程序会：
+1. 使用 GitHub 公开 API 搜索代码（有速率限制，每分钟 10 次）
+2. 提取订阅链接
+3. 解析并测试节点
+4. 保存结果到 `nodes.txt`
+
+### 使用 GitHub Token（推荐）
+
+使用 GitHub Token 可以获得更高的 API 速率限制（每分钟 5000 次）。
+
+```bash
+export GITHUB_TOKEN=your_github_token
+go run main.go config.go
+```
+
+### 推送到 GitHub 仓库
+
+如果你想将结果自动推送到 GitHub 仓库：
+
+```bash
+export GITHUB_TOKEN=your_github_token
+export GITHUB_REPO=your_username/your_repo
+go run main.go config.go
+```
+
+程序会将 `nodes.txt` 推送到指定仓库的根目录。
+
+### 高级配置
+
+```bash
+# 设置并发数（默认 10）
+export MAX_CONCURRENCY=20
+
+# 设置节点测试超时时间（秒，默认 5）
+export TEST_TIMEOUT=10
+
+# 完整示例
+export GITHUB_TOKEN=your_token
+export GITHUB_REPO=username/repo
+export MAX_CONCURRENCY=20
+export TEST_TIMEOUT=10
+go run main.go config.go
+```
+
+## 环境变量说明
+
+| 变量名 | 说明 | 必需 | 默认值 |
+|--------|------|------|--------|
+| `GITHUB_TOKEN` | GitHub Personal Access Token | 否 | - |
+| `GITHUB_REPO` | GitHub 仓库（格式: owner/repo） | 否 | - |
+| `MAX_CONCURRENCY` | 最大并发数 | 否 | 10 |
+| `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | 5 |
+
+## 获取 GitHub Token
+
+1. 访问 https://github.com/settings/tokens
+2. 点击 "Generate new token (classic)"
+3. 选择权限：
+   - `public_repo` (如果需要推送)
+   - `repo` (如果需要推送到私有仓库)
+4. 生成并复制 token
+
+**注意**: 即使不提供 token，程序也可以运行，但会受到 GitHub API 的速率限制。
+
+## 输出文件
+
+程序会在当前目录生成 `nodes.txt` 文件，每行一个节点链接，格式如下：
+
+```
+ss://YWVzLTI1Ni1nY206YzVUYzNGN1c0NFdjQmRFREA5Ni40NS4xODguMzM6MTUxMzA#JMS-1268850@c83s1.portablesubmarines.com:15130
+vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAiLCJwb3J0IjoiMTUxMzAiLCJpZCI6ImRkZjg4ZjQxLWMyM2UtNDZhMC04MGZhLTA2MmJiOTBiYzg0OCIsImFpZCI6MCwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJ0bHMiOiJub25lIiwiYWRkIjoiMTk4LjM1LjQ3LjI3In0
+...
+```
+
+## 自动化运行
+
+### 使用 GitHub Actions（推荐）
+
+本项目已配置 GitHub Actions 工作流，可以自动每天采集节点并更新到仓库。
+
+#### 设置步骤
+
+1. **配置 GitHub Secrets**
+
+   在仓库设置中添加以下 Secrets（Settings → Secrets and variables → Actions → New repository secret）：
+
+   | Secret 名称 | 说明 | 必需 | 示例值 |
+   |------------|------|------|--------|
+   | `GITHUB_TOKEN` | GitHub Personal Access Token（用于搜索和推送） | 是 | `ghp_xxxxxxxxxxxx` |
+   | `GITHUB_REPO` | 仓库名称（格式: owner/repo） | 否 | `moneyfly004/jms` |
+   | `MAX_CONCURRENCY` | 最大并发数 | 否 | `10` |
+   | `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | `5` |
+
+   **如何获取 GITHUB_TOKEN：**
+   1. 访问 https://github.com/settings/tokens
+   2. 点击 "Generate new token (classic)"
+   3. 选择权限：
+      - `public_repo` (搜索代码)
+      - `repo` (推送代码到仓库)
+   4. 生成并复制 token
+   5. 在仓库 Settings → Secrets 中添加为 `GITHUB_TOKEN`
+
+2. **启用 GitHub Actions**
+
+   - 工作流文件已创建在 `.github/workflows/collect-nodes.yml`
+   - 默认每天 UTC 时间 02:00（北京时间 10:00）自动运行
+   - 也可以手动触发：Actions → 选择 "自动采集节点" → Run workflow
+
+3. **查看运行结果**
+
+   - 在 Actions 标签页查看运行日志
+   - 采集的节点会自动保存到 `nodes.txt` 文件
+   - 如果有更新，会自动提交并推送到仓库
+
+#### 工作流说明
+
+- **定时触发**: 每天 UTC 02:00 自动运行
+- **手动触发**: 可以在 Actions 页面手动运行
+- **自动提交**: 如果节点有更新，会自动提交并推送
+
+### 使用 cron（Linux/macOS）
+
+```bash
+# 编辑 crontab
+crontab -e
+
+# 添加定时任务（每天凌晨 2 点运行）
+0 2 * * * cd /path/to/goweb/jms采集 && /usr/local/go/bin/go run main.go config.go >> /path/to/logs/jms_collector.log 2>&1
+```
+
+### 使用 systemd（Linux）
+
+创建服务文件 `/etc/systemd/system/jms-collector.service`:
+
+```ini
+[Unit]
+Description=JMS Node Collector
+After=network.target
+
+[Service]
+Type=oneshot
+User=your_user
+WorkingDirectory=/path/to/goweb/jms采集
+Environment="GITHUB_TOKEN=your_token"
+Environment="GITHUB_REPO=username/repo"
+ExecStart=/usr/local/go/bin/go run main.go config.go
+
+[Install]
+WantedBy=multi-user.target
+```
+
+创建定时器 `/etc/systemd/system/jms-collector.timer`:
+
+```ini
+[Unit]
+Description=Run JMS Collector Daily
+Requires=jms-collector.service
+
+[Timer]
+OnCalendar=daily
+OnCalendar=02:00
+
+[Install]
+WantedBy=timers.target
+```
+
+启用定时器：
+
+```bash
+sudo systemctl enable jms-collector.timer
+sudo systemctl start jms-collector.timer
+```
+
+## 注意事项
+
+1. **速率限制**: 不使用 token 时，GitHub API 限制为每分钟 10 次请求
+2. **网络连接**: 节点测速需要网络连接，某些节点可能无法访问
+3. **节点有效性**: 程序只进行基本的 TCP 连通性测试，不保证节点完全可用
+4. **隐私**: 请妥善保管你的 GitHub Token，不要提交到代码仓库
+
+## 故障排除
+
+### 问题: 搜索失败，返回 403
+
+**解决方案**: 提供 GitHub Token 或等待速率限制重置
+
+### 问题: 节点解析失败
+
+**解决方案**: 检查订阅链接是否有效，内容是否为 base64 编码
+
+### 问题: 推送失败
+
+**解决方案**: 
+- 确认 GitHub Token 有 `repo` 权限
+- 确认仓库名称格式正确（owner/repo）
+- 确认仓库存在且有写入权限
+
+## 许可证
+
+本项目遵循项目主仓库的许可证。
+
