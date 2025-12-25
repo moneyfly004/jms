@@ -382,6 +382,8 @@ func (c *Collector) Collect() error {
 
 	// 采集节点
 	var allValidNodes []*ValidNode
+	var allParsedNodes []string // 保存所有解析出的节点（用于去重）
+	seenNodeLinks := make(map[string]bool) // 全局去重
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(links))
 
@@ -430,6 +432,13 @@ func (c *Collector) Collect() error {
 
 			// 测试节点
 			for _, nodeLink := range nodes {
+				// 全局去重
+				if seenNodeLinks[nodeLink] {
+					continue
+				}
+				seenNodeLinks[nodeLink] = true
+				allParsedNodes = append(allParsedNodes, nodeLink)
+				
 				validNode := c.TestNode(nodeLink)
 				if validNode.Error == nil {
 					result.ValidNodes = append(result.ValidNodes, validNode)
@@ -488,7 +497,7 @@ func (c *Collector) Collect() error {
 		}
 	}
 
-	log.Printf("采集完成，共解析 %d 个节点，%d 个可用节点", totalNodes, len(allValidNodes))
+	log.Printf("采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(allValidNodes))
 	if len(typeStats) > 0 {
 		log.Printf("解析出的节点类型统计:")
 		for nodeType, count := range typeStats {
@@ -499,7 +508,15 @@ func (c *Collector) Collect() error {
 	}
 
 	// 保存结果
-	return c.SaveResults(allValidNodes)
+	// 检查环境变量，决定是否只保存测试通过的节点
+	saveAllNodes := os.Getenv("SAVE_ALL_NODES") == "true"
+	if saveAllNodes {
+		log.Printf("保存所有解析出的节点（包括测试失败的）")
+		return c.SaveAllNodes(allParsedNodes)
+	} else {
+		log.Printf("只保存测试通过的节点")
+		return c.SaveResults(allValidNodes)
+	}
 }
 
 // SaveResults 保存结果
@@ -521,6 +538,36 @@ func (c *Collector) SaveResults(nodes []*ValidNode) error {
 
 	// 如果配置了 GitHub，推送到 GitHub
 	if repo := os.Getenv("GITHUB_REPO"); repo != "" {
+		return c.PushToGitHub(outputFile, nodes)
+	}
+
+	return nil
+}
+
+// SaveAllNodes 保存所有解析出的节点（包括测试失败的）
+func (c *Collector) SaveAllNodes(nodeLinks []string) error {
+	// 创建输出文件
+	outputFile := "nodes.txt"
+	file, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("创建文件失败: %v", err)
+	}
+	defer file.Close()
+
+	// 写入节点
+	for _, nodeLink := range nodeLinks {
+		file.WriteString(nodeLink + "\n")
+	}
+
+	log.Printf("结果已保存到 %s，共 %d 个节点（包括测试失败的）", outputFile, len(nodeLinks))
+
+	// 如果配置了 GitHub，推送到 GitHub
+	if repo := os.Getenv("GITHUB_REPO"); repo != "" {
+		// 转换为 ValidNode 格式以兼容 PushToGitHub
+		var nodes []*ValidNode
+		for _, link := range nodeLinks {
+			nodes = append(nodes, &ValidNode{Link: link})
+		}
 		return c.PushToGitHub(outputFile, nodes)
 	}
 

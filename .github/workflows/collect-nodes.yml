@@ -28,7 +28,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
         MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '10' }}
-        TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '5' }}
+        TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '10' }}
+        SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'true' }}
       run: |
         go run main.go config.go node_parser.go
         
