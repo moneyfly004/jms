@@ -59,6 +59,8 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	// 使用 sing-box 测试延迟
 	latency, err := c.testLatencyWithSingBox(singBoxPath, configFile)
 	if err != nil {
+		// 记录详细错误信息用于调试
+		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v", nodeLink[:min(50, len(nodeLink))], err)
 		result.Error = fmt.Errorf("sing-box 测试失败: %v", err)
 		return result
 	}
@@ -130,8 +132,39 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 				return 0
 			}(),
 		}
+		// VMess 传输方式配置
 		if node.Network != "" && node.Network != "tcp" {
-			outbound["network"] = node.Network
+			transportConfig := map[string]interface{}{}
+			switch node.Network {
+			case "ws":
+				transportConfig["type"] = "ws"
+				if node.WSPath != "" {
+					transportConfig["path"] = node.WSPath
+				}
+				if node.WSHost != "" {
+					transportConfig["headers"] = map[string]interface{}{
+						"Host": node.WSHost,
+					}
+				}
+			case "http":
+				transportConfig["type"] = "http"
+				if node.WSPath != "" {
+					transportConfig["path"] = node.WSPath
+				}
+				if node.WSHost != "" {
+					transportConfig["host"] = []string{node.WSHost}
+				}
+			case "grpc":
+				transportConfig["type"] = "grpc"
+				if node.ServiceName != "" {
+					transportConfig["service_name"] = node.ServiceName
+				}
+			default:
+				transportConfig["type"] = node.Network
+			}
+			if len(transportConfig) > 0 {
+				outbound["transport"] = transportConfig
+			}
 		}
 		if node.TLS {
 			tlsConfig := map[string]interface{}{
@@ -290,6 +323,9 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 		return "", fmt.Errorf("不支持的节点类型: %s", node.Type)
 	}
 
+	// 为 outbound 添加 tag
+	outbound["tag"] = "proxy"
+	
 	// 创建完整配置
 	config := map[string]interface{}{
 		"log": map[string]interface{}{
@@ -309,9 +345,9 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			"rules": []map[string]interface{}{
 				{
 					"outbound": "proxy",
-					"default":  true,
 				},
 			},
+			"final": "proxy",
 		},
 	}
 
@@ -380,20 +416,44 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 启动 sing-box 进行真实连接测试
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd = exec.CommandContext(ctx, singBoxPath, "run", "-c", configFile)
-	cmd.Stdout = os.Stderr // 重定向输出到 stderr
-	cmd.Stderr = os.Stderr
+	// 不重定向输出，避免干扰
+	cmd.Stdout = nil
+	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("启动 sing-box 失败: %v", err)
 	}
-	defer cmd.Process.Kill()
+	
+	// 确保进程被清理
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+			cmd.Process.Wait()
+		}
+	}()
 
-	// 等待 sing-box 启动
-	time.Sleep(1 * time.Second)
+	// 等待 sing-box 启动（增加等待时间）
+	maxWait := 5 * time.Second
+	waitInterval := 200 * time.Millisecond
+	waited := time.Duration(0)
+	for waited < maxWait {
+		// 检查端口是否已监听
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(waitInterval)
+		waited += waitInterval
+	}
+	
+	if waited >= maxWait {
+		return 0, fmt.Errorf("sing-box 启动超时，端口 %d 未就绪", port)
+	}
 
 	// 通过代理测试真实连接
 	testURL := os.Getenv("TEST_URL")
@@ -411,9 +471,18 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	transport := &http.Transport{
 		Proxy: proxyFunc,
 	}
+	// 从环境变量读取超时时间
+	timeoutStr := os.Getenv("TEST_TIMEOUT")
+	timeout := 15 * time.Second
+	if timeoutStr != "" {
+		if seconds, err := time.ParseDuration(timeoutStr + "s"); err == nil {
+			timeout = seconds
+		}
+	}
+	
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   5 * time.Second,
+		Timeout:   timeout,
 	}
 
 	req, err := http.NewRequest("GET", testURL, nil)
@@ -429,8 +498,8 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 
 	latency := time.Since(start)
 
-	// 如果状态码是 200 或 204，说明连接成功
-	if resp.StatusCode == 200 || resp.StatusCode == 204 {
+	// 如果状态码是 200、204 或其他 2xx，说明连接成功
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return latency, nil
 	}
 

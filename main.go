@@ -82,7 +82,7 @@ func NewCollector(githubToken string) *Collector {
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:    90 * time.Second,
+				IdleConnTimeout:     90 * time.Second,
 			},
 		},
 		seenLinks: make(map[string]bool),
@@ -174,18 +174,18 @@ func (c *Collector) extractSubLinks(content string) []string {
 	matches := subLinkPattern.FindAllString(content, -1)
 	var links []string
 	seenLinks := make(map[string]bool)
-	
+
 	for _, match := range matches {
 		// 清理链接
 		link := strings.TrimSpace(match)
 		link = strings.TrimRight(link, ".,;!?)")
 		link = strings.TrimRight(link, "\"')")
-		
+
 		// 过滤掉明显不是订阅链接的 URL
-		if link != "" && 
-		   !strings.Contains(link, "github.com") &&
-		   !strings.Contains(link, "raw.githubusercontent.com") &&
-		   !seenLinks[link] {
+		if link != "" &&
+			!strings.Contains(link, "github.com") &&
+			!strings.Contains(link, "raw.githubusercontent.com") &&
+			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
 		}
@@ -226,10 +226,10 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 
 			// 只处理 YAML、TXT、JSON 等配置文件
 			if !strings.HasSuffix(item.Path, ".yaml") &&
-			   !strings.HasSuffix(item.Path, ".yml") &&
-			   !strings.HasSuffix(item.Path, ".txt") &&
-			   !strings.HasSuffix(item.Path, ".json") &&
-			   !strings.HasSuffix(item.Path, ".conf") {
+				!strings.HasSuffix(item.Path, ".yml") &&
+				!strings.HasSuffix(item.Path, ".txt") &&
+				!strings.HasSuffix(item.Path, ".json") &&
+				!strings.HasSuffix(item.Path, ".conf") {
 				continue
 			}
 
@@ -281,7 +281,7 @@ func (c *Collector) CollectSubNodes() error {
 		"clash?token",
 		"v2ray?token",
 	}
-	
+
 	subLinks, err := c.SearchSubLinks(keywords)
 	if err != nil {
 		return fmt.Errorf("搜索订阅链接失败: %v", err)
@@ -296,7 +296,7 @@ func (c *Collector) CollectSubNodes() error {
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(subLinks))
 	maxValidNodes := 200 // 限制最多200个可用节点
-	var mu sync.Mutex // 保护 allValidNodes 的并发访问
+	var mu sync.Mutex    // 保护 allValidNodes 的并发访问
 
 	// 并发采集
 	maxConcurrency := 10
@@ -312,7 +312,7 @@ func (c *Collector) CollectSubNodes() error {
 		mu.Lock()
 		currentCount := len(allValidNodes)
 		mu.Unlock()
-		
+
 		if currentCount >= maxValidNodes {
 			log.Printf("已达到目标节点数（%d个），停止采集新的订阅链接", maxValidNodes)
 			break
@@ -376,9 +376,9 @@ func (c *Collector) CollectSubNodes() error {
 				}
 				seenNodeLinks[nodeLink] = true
 				mu.Unlock()
-				
+
 				allParsedNodes = append(allParsedNodes, nodeLink)
-				
+
 				// 根据环境变量选择测试方式（默认启用 sing-box）
 				var validNode *ValidNode
 				useSingBox := os.Getenv("USE_SINGBOX")
@@ -416,28 +416,28 @@ func (c *Collector) CollectSubNodes() error {
 	validTypeStats := make(map[string]int)
 	totalNodes := 0
 	totalValidNodes := 0
-	
+
 	for result := range resultsChan {
 		if result.Error != nil {
 			log.Printf("订阅链接 %s 处理失败: %v", result.Link, result.Error)
 		} else {
 			totalNodes += len(result.Nodes)
 			totalValidNodes += len(result.ValidNodes)
-			
+
 			// 统计节点类型
 			for _, nodeLink := range result.Nodes {
 				if node, err := ParseNodeLink(nodeLink); err == nil {
 					typeStats[node.Type]++
 				}
 			}
-			
+
 			// 统计测试结果
 			for _, validNode := range result.ValidNodes {
 				if validNode.Type != "" && validNode.Error == nil {
 					validTypeStats[validNode.Type]++
 				}
 			}
-			
+
 			log.Printf("订阅链接 %s: 共 %d 个节点，%d 个可用",
 				result.Link, len(result.Nodes), len(result.ValidNodes))
 		}
@@ -487,7 +487,7 @@ func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
 	if gistToken == "" {
 		gistToken = c.githubToken
 	}
-	
+
 	if subGistID != "" || gistToken != "" {
 		log.Printf("准备推送到订阅 Gist (ID: %s)...", subGistID)
 		if err := c.PushToSubGist(outputFile, nodes, subGistID, gistToken); err != nil {
@@ -512,13 +512,13 @@ func (c *Collector) PushToSubGist(filePath string, nodes []*ValidNode, gistID, g
 	if err != nil {
 		return fmt.Errorf("读取文件失败: %v", err)
 	}
-	
+
 	contentStr := string(content)
 	fileNodeCount := len(strings.Split(strings.TrimSpace(contentStr), "\n"))
 	if strings.TrimSpace(contentStr) == "" {
 		fileNodeCount = 0
 	}
-	
+
 	log.Printf("📄 读取文件 %s，包含 %d 行节点", filePath, fileNodeCount)
 	log.Printf("📊 准备推送 %d 个节点到订阅 Gist", len(nodes))
 
@@ -581,8 +581,8 @@ func (c *Collector) PushToSubGist(filePath string, nodes []*ValidNode, gistID, g
 
 	// 解析响应获取 Gist ID
 	var gistResponse struct {
-		ID  string `json:"id"`
-		URL string `json:"html_url"`
+		ID    string `json:"id"`
+		URL   string `json:"html_url"`
 		Files map[string]struct {
 			RawURL string `json:"raw_url"`
 		} `json:"files"`
@@ -595,15 +595,15 @@ func (c *Collector) PushToSubGist(filePath string, nodes []*ValidNode, gistID, g
 		} else if gistID != "" {
 			log.Printf("✅ 订阅 Gist 已更新，ID: %s", gistID)
 		}
-		
+
 		if gistResponse.Files != nil && gistResponse.Files["sub.txt"].RawURL != "" {
 			log.Printf("🔗 订阅地址: %s", gistResponse.Files["sub.txt"].RawURL)
 		}
-		
+
 		if gistResponse.URL != "" {
 			log.Printf("🌐 Gist 页面: %s", gistResponse.URL)
 		}
-		
+
 		// 验证推送的节点数量
 		if len(nodes) > 0 {
 			log.Printf("📊 已推送 %d 个节点到订阅 Gist", len(nodes))
@@ -623,7 +623,7 @@ func (c *Collector) extractNodesFromRawContent(content string) []string {
 
 	// 支持多种分隔符
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -837,7 +837,7 @@ func (c *Collector) Collect() error {
 
 	// 采集节点
 	var allValidNodes []*ValidNode
-	var allParsedNodes []string // 保存所有解析出的节点（用于去重）
+	var allParsedNodes []string            // 保存所有解析出的节点（用于去重）
 	seenNodeLinks := make(map[string]bool) // 全局去重
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(links))
@@ -893,7 +893,7 @@ func (c *Collector) Collect() error {
 				}
 				seenNodeLinks[nodeLink] = true
 				allParsedNodes = append(allParsedNodes, nodeLink)
-				
+
 				// 根据环境变量选择测试方式（默认启用 sing-box）
 				var validNode *ValidNode
 				useSingBox := os.Getenv("USE_SINGBOX")
@@ -924,26 +924,26 @@ func (c *Collector) Collect() error {
 	}()
 
 	// 收集结果并统计
-	typeStats := make(map[string]int)        // 所有解析出的节点类型统计
-	validTypeStats := make(map[string]int)    // 测试通过的节点类型统计
-	failedTypeStats := make(map[string]int)   // 测试失败的节点类型统计
+	typeStats := make(map[string]int)       // 所有解析出的节点类型统计
+	validTypeStats := make(map[string]int)  // 测试通过的节点类型统计
+	failedTypeStats := make(map[string]int) // 测试失败的节点类型统计
 	totalNodes := 0
 	totalValidNodes := 0
-	
+
 	for result := range resultsChan {
 		if result.Error != nil {
 			log.Printf("链接 %s 处理失败: %v", result.Link, result.Error)
 		} else {
 			totalNodes += len(result.Nodes)
 			totalValidNodes += len(result.ValidNodes)
-			
+
 			// 统计所有解析出的节点类型
 			for _, nodeLink := range result.Nodes {
 				if node, err := ParseNodeLink(nodeLink); err == nil {
 					typeStats[node.Type]++
 				}
 			}
-			
+
 			// 统计测试结果
 			for _, validNode := range result.ValidNodes {
 				if validNode.Type != "" {
@@ -954,7 +954,7 @@ func (c *Collector) Collect() error {
 					}
 				}
 			}
-			
+
 			log.Printf("链接 %s: 共 %d 个节点，%d 个可用",
 				result.Link, len(result.Nodes), len(result.ValidNodes))
 		}
@@ -1144,7 +1144,7 @@ func main() {
 	}
 
 	collector := NewCollector(githubToken)
-	
+
 	// 采集 JMS 节点（生成 nodes.txt）
 	log.Println("========== 开始采集 JMS 节点 ==========")
 	if err := collector.Collect(); err != nil {
@@ -1152,7 +1152,7 @@ func main() {
 	} else {
 		log.Println("========== JMS 节点采集完成 ==========")
 	}
-	
+
 	// 采集订阅链接中的节点（生成 sub.txt）
 	log.Println("========== 开始采集订阅链接节点 ==========")
 	if err := collector.CollectSubNodes(); err != nil {
@@ -1160,6 +1160,6 @@ func main() {
 	} else {
 		log.Println("========== 订阅节点采集完成 ==========")
 	}
-	
+
 	log.Println("========== 所有采集任务完成 ==========")
 }
