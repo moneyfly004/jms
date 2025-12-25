@@ -628,12 +628,17 @@ func (c *Collector) extractNodesFromRawContent(content string) []string {
 			continue
 		}
 
-		// 直接检查是否是节点链接
+		// 直接检查是否是节点链接（支持所有协议）
 		if strings.HasPrefix(line, "ss://") ||
 			strings.HasPrefix(line, "vmess://") ||
 			strings.HasPrefix(line, "vless://") ||
 			strings.HasPrefix(line, "trojan://") ||
-			strings.HasPrefix(line, "ssr://") {
+			strings.HasPrefix(line, "ssr://") ||
+			strings.HasPrefix(line, "hysteria://") ||
+			strings.HasPrefix(line, "hy2://") ||
+			strings.HasPrefix(line, "wireguard://") ||
+			strings.HasPrefix(line, "wg://") ||
+			strings.HasPrefix(line, "tuic://") {
 			if !seenNodes[line] {
 				seenNodes[line] = true
 				nodes = append(nodes, line)

@@ -4,11 +4,21 @@
 
 默认情况下，程序使用 TCP 连通性测试来验证节点。如果你想要使用 **sing-box** 内核进行**真实链接测速**（通过代理实际访问网站），可以按照以下步骤配置。
 
+**注意**：sing-box 内核会在 GitHub Actions 中自动下载安装，无需手动操作。
+
 ## 优势
 
 - ✅ **真实连接测试**：通过代理实际访问网站，验证节点是否真正可用
 - ✅ **更准确的测速**：测试真实的网络延迟，而不仅仅是 TCP 连接
-- ✅ **支持所有协议**：sing-box 支持 SS、VMess、VLESS、Trojan 等所有协议
+- ✅ **支持所有协议**：sing-box 支持以下所有协议：
+  - **Shadowsocks (SS)**
+  - **VMess**
+  - **VLESS**
+  - **Trojan**
+  - **ShadowsocksR (SSR)** - 转换为 Shadowsocks 配置
+  - **Hysteria / Hysteria2**
+  - **WireGuard**
+  - **TUIC**
 
 ## 配置步骤
 

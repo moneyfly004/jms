@@ -21,6 +21,26 @@ type ProxyNode struct {
 	Network  string
 	TLS      bool
 	UDP      bool
+	// SSR 相关
+	Protocol     string // SSR 协议
+	ProtocolParam string // SSR 协议参数
+	Obfs         string // SSR 混淆
+	ObfsParam    string // SSR 混淆参数
+	// Hysteria 相关
+	Auth         string // Hysteria 认证
+	ObfsPassword string // Hysteria 混淆密码
+	// WireGuard 相关
+	PrivateKey string // WireGuard 私钥
+	PublicKey  string // WireGuard 公钥
+	Reserved   string // WireGuard Reserved
+	// TUIC 相关
+	Token string // TUIC Token
+	// 通用字段
+	SNI      string // Server Name Indication
+	ALPN     string // Application-Layer Protocol Negotiation
+	Flow     string // VLESS Flow
+	Security string // VMess Security
+	AlterID  int    // VMess AlterID
 }
 
 // ParseNodeLink 解析节点链接
@@ -35,6 +55,14 @@ func ParseNodeLink(link string) (*ProxyNode, error) {
 		return parseVLESS(link)
 	} else if strings.HasPrefix(link, "trojan://") {
 		return parseTrojan(link)
+	} else if strings.HasPrefix(link, "ssr://") {
+		return parseSSR(link)
+	} else if strings.HasPrefix(link, "hysteria://") || strings.HasPrefix(link, "hy2://") {
+		return parseHysteria(link)
+	} else if strings.HasPrefix(link, "wireguard://") || strings.HasPrefix(link, "wg://") {
+		return parseWireGuard(link)
+	} else if strings.HasPrefix(link, "tuic://") {
+		return parseTUIC(link)
 	}
 
 	return nil, fmt.Errorf("不支持的协议")
@@ -100,9 +128,41 @@ func parseVMess(link string) (*ProxyNode, error) {
 		UDP:     true,
 	}
 
+	// Security 配置
+	if security, ok := data["scy"].(string); ok && security != "" {
+		node.Security = security
+	} else if security, ok := data["security"].(string); ok && security != "" {
+		node.Security = security
+	}
+
+	// AlterID 配置
+	if alterID, ok := data["aid"].(float64); ok {
+		node.AlterID = int(alterID)
+	} else if alterID, ok := data["alterId"].(float64); ok {
+		node.AlterID = int(alterID)
+	}
+
 	// TLS 配置
 	if tls, ok := data["tls"].(string); ok && tls == "tls" {
 		node.TLS = true
+	} else if tls, ok := data["tls"].(bool); ok && tls {
+		node.TLS = true
+	}
+
+	// SNI 配置
+	if sni, ok := data["sni"].(string); ok && sni != "" {
+		node.SNI = sni
+	} else if sni, ok := data["host"].(string); ok && sni != "" {
+		node.SNI = sni
+	}
+
+	// ALPN 配置
+	if alpn, ok := data["alpn"].(string); ok && alpn != "" {
+		node.ALPN = alpn
+	} else if alpnArray, ok := data["alpn"].([]interface{}); ok && len(alpnArray) > 0 {
+		if alpnStr, ok := alpnArray[0].(string); ok {
+			node.ALPN = alpnStr
+		}
 	}
 
 	return node, nil
@@ -142,6 +202,27 @@ func parseVLESS(link string) (*ProxyNode, error) {
 		node.TLS = true
 	}
 
+	// Flow 配置
+	flow := query.Get("flow")
+	if flow != "" {
+		node.Flow = flow
+	}
+
+	// SNI 配置
+	sni := query.Get("sni")
+	if sni == "" {
+		sni = query.Get("host")
+	}
+	if sni != "" {
+		node.SNI = sni
+	}
+
+	// ALPN 配置
+	alpn := query.Get("alpn")
+	if alpn != "" {
+		node.ALPN = alpn
+	}
+
 	return node, nil
 }
 
@@ -165,6 +246,22 @@ func parseTrojan(link string) (*ProxyNode, error) {
 		Password: password,
 		TLS:      true,
 		UDP:      true,
+	}
+
+	// SNI 配置
+	query := parsed.Query()
+	sni := query.Get("sni")
+	if sni == "" {
+		sni = query.Get("peer")
+	}
+	if sni != "" {
+		node.SNI = sni
+	}
+
+	// ALPN 配置
+	alpn := query.Get("alpn")
+	if alpn != "" {
+		node.ALPN = alpn
 	}
 
 	return node, nil
@@ -363,6 +460,204 @@ func getFragment(parsed *url.URL, defaultValue string) string {
 		return parsed.Fragment
 	}
 	return defaultValue
+}
+
+// parseSSR 解析 SSR 链接
+func parseSSR(link string) (*ProxyNode, error) {
+	// SSR 格式: ssr://base64(server:port:protocol:method:obfs:base64(password)/?obfsparam=base64(obfsparam)&protoparam=base64(protoparam)&remarks=base64(remarks))
+	encoded := strings.TrimPrefix(link, "ssr://")
+	
+	// URL 解码
+	decoded, err := url.QueryUnescape(encoded)
+	if err == nil {
+		encoded = decoded
+	}
+	
+	// Base64 解码
+	decodedBytes, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		decodedBytes, err = base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("SSR Base64 解码失败: %v", err)
+		}
+	}
+	
+	decodedStr := string(decodedBytes)
+	
+	// 解析 SSR 格式
+	parts := strings.Split(decodedStr, "/")
+	if len(parts) < 1 {
+		return nil, fmt.Errorf("无效的 SSR 格式")
+	}
+	
+	mainPart := parts[0]
+	params := ""
+	if len(parts) > 1 {
+		params = strings.Join(parts[1:], "/")
+	}
+	
+	// 解析主部分: server:port:protocol:method:obfs:password
+	mainParts := strings.Split(mainPart, ":")
+	if len(mainParts) < 6 {
+		return nil, fmt.Errorf("SSR 格式不完整")
+	}
+	
+	server := mainParts[0]
+	port, err := strconv.Atoi(mainParts[1])
+	if err != nil {
+		return nil, fmt.Errorf("无效的端口: %s", mainParts[1])
+	}
+	
+	protocol := mainParts[2]
+	method := mainParts[3]
+	obfs := mainParts[4]
+	passwordBase64 := strings.Join(mainParts[5:], ":")
+	
+	// 解码密码
+	passwordBytes, err := base64.URLEncoding.DecodeString(passwordBase64)
+	if err != nil {
+		passwordBytes, err = base64.StdEncoding.DecodeString(passwordBase64)
+		if err != nil {
+			return nil, fmt.Errorf("密码解码失败: %v", err)
+		}
+	}
+	password := string(passwordBytes)
+	
+	// 解析参数
+	var obfsParam, protocolParam, remarks string
+	if params != "" {
+		parsedParams, _ := url.Parse("?" + params)
+		query := parsedParams.Query()
+		
+		if obfsParamBase64 := query.Get("obfsparam"); obfsParamBase64 != "" {
+			decoded, _ := base64.URLEncoding.DecodeString(obfsParamBase64)
+			if len(decoded) > 0 {
+				obfsParam = string(decoded)
+			}
+		}
+		
+		if protocolParamBase64 := query.Get("protoparam"); protocolParamBase64 != "" {
+			decoded, _ := base64.URLEncoding.DecodeString(protocolParamBase64)
+			if len(decoded) > 0 {
+				protocolParam = string(decoded)
+			}
+		}
+		
+		if remarksBase64 := query.Get("remarks"); remarksBase64 != "" {
+			decoded, _ := base64.URLEncoding.DecodeString(remarksBase64)
+			if len(decoded) > 0 {
+				remarks = string(decoded)
+			}
+		}
+	}
+	
+	if remarks == "" {
+		remarks = fmt.Sprintf("SSR-%s:%d", server, port)
+	}
+	
+	return &ProxyNode{
+		Name:          remarks,
+		Type:          "ssr",
+		Server:        server,
+		Port:          port,
+		Password:      password,
+		Cipher:        method,
+		Protocol:     protocol,
+		ProtocolParam: protocolParam,
+		Obfs:          obfs,
+		ObfsParam:     obfsParam,
+	}, nil
+}
+
+// parseHysteria 解析 Hysteria 链接
+func parseHysteria(link string) (*ProxyNode, error) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+	
+	query := parsed.Query()
+	
+	port := getPort(parsed)
+	auth := query.Get("auth")
+	obfsPassword := query.Get("obfs")
+	
+	name := getFragment(parsed, fmt.Sprintf("Hysteria-%s:%d", parsed.Hostname(), port))
+	
+	return &ProxyNode{
+		Name:         name,
+		Type:         "hysteria",
+		Server:       parsed.Hostname(),
+		Port:         port,
+		Auth:         auth,
+		ObfsPassword: obfsPassword,
+		UDP:          true,
+	}, nil
+}
+
+// parseWireGuard 解析 WireGuard 链接
+func parseWireGuard(link string) (*ProxyNode, error) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+	
+	privateKey := parsed.User.Username()
+	if privateKey == "" {
+		return nil, fmt.Errorf("缺少私钥")
+	}
+	
+	query := parsed.Query()
+	publicKey := query.Get("publickey")
+	reserved := query.Get("reserved")
+	
+	port := getPort(parsed)
+	name := getFragment(parsed, fmt.Sprintf("WireGuard-%s:%d", parsed.Hostname(), port))
+	
+	return &ProxyNode{
+		Name:       name,
+		Type:       "wireguard",
+		Server:     parsed.Hostname(),
+		Port:       port,
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
+		Reserved:   reserved,
+		UDP:        true,
+	}, nil
+}
+
+// parseTUIC 解析 TUIC 链接
+func parseTUIC(link string) (*ProxyNode, error) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+	
+	uuid := parsed.User.Username()
+	if uuid == "" {
+		return nil, fmt.Errorf("缺少 UUID")
+	}
+	
+	query := parsed.Query()
+	token := query.Get("token")
+	password := query.Get("password")
+	if password == "" {
+		password = uuid
+	}
+	
+	port := getPort(parsed)
+	name := getFragment(parsed, fmt.Sprintf("TUIC-%s:%d", parsed.Hostname(), port))
+	
+	return &ProxyNode{
+		Name:     name,
+		Type:     "tuic",
+		Server:   parsed.Hostname(),
+		Port:     port,
+		UUID:     uuid,
+		Password: password,
+		Token:    token,
+		UDP:      true,
+	}, nil
 }
 
 func getPort(parsed *url.URL) int {

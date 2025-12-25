@@ -14,14 +14,6 @@ import (
 	"time"
 )
 
-// SingBoxTestResult sing-box 测试结果
-type SingBoxTestResult struct {
-	Success bool
-	Latency time.Duration
-	Speed   float64 // MB/s
-	Error   error
-}
-
 // TestNodeWithSingBox 使用 sing-box 测试节点（真实链接测速）
 func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	result := &ValidNode{
@@ -105,25 +97,53 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			"type":        "shadowsocks",
 			"server":      node.Server,
 			"server_port": node.Port,
-			"method":      node.Cipher, // 使用 Cipher 字段
+			"method":      node.Cipher,
 			"password":    node.Password,
 		}
+	case "ssr":
+		// SSR 在 sing-box 中需要转换为 shadowsocks
+		// 注意：sing-box 不完全支持 SSR，这里使用基本配置
+		outbound = map[string]interface{}{
+			"type":        "shadowsocks",
+			"server":      node.Server,
+			"server_port": node.Port,
+			"method":      node.Cipher,
+			"password":    node.Password,
+		}
+		log.Printf("⚠️ SSR 节点 %s 转换为 Shadowsocks 配置（sing-box 不完全支持 SSR）", node.Name)
 	case "vmess":
 		outbound = map[string]interface{}{
 			"type":        "vmess",
 			"server":      node.Server,
 			"server_port": node.Port,
 			"uuid":        node.UUID,
-			"security":    "auto", // 默认值
-			"alter_id":    0,      // 默认值
+			"security":    func() string {
+				if node.Security != "" {
+					return node.Security
+				}
+				return "auto"
+			}(),
+			"alter_id": func() int {
+				if node.AlterID > 0 {
+					return node.AlterID
+				}
+				return 0
+			}(),
 		}
-		if node.Network != "" {
+		if node.Network != "" && node.Network != "tcp" {
 			outbound["network"] = node.Network
 		}
 		if node.TLS {
-			outbound["tls"] = map[string]interface{}{
+			tlsConfig := map[string]interface{}{
 				"enabled": true,
 			}
+			if node.SNI != "" {
+				tlsConfig["server_name"] = node.SNI
+			}
+			if node.ALPN != "" {
+				tlsConfig["alpn"] = []string{node.ALPN}
+			}
+			outbound["tls"] = tlsConfig
 		}
 	case "vless":
 		outbound = map[string]interface{}{
@@ -132,13 +152,23 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			"server_port": node.Port,
 			"uuid":        node.UUID,
 		}
-		if node.Network != "" {
+		if node.Flow != "" {
+			outbound["flow"] = node.Flow
+		}
+		if node.Network != "" && node.Network != "tcp" {
 			outbound["network"] = node.Network
 		}
 		if node.TLS {
-			outbound["tls"] = map[string]interface{}{
+			tlsConfig := map[string]interface{}{
 				"enabled": true,
 			}
+			if node.SNI != "" {
+				tlsConfig["server_name"] = node.SNI
+			}
+			if node.ALPN != "" {
+				tlsConfig["alpn"] = []string{node.ALPN}
+			}
+			outbound["tls"] = tlsConfig
 		}
 	case "trojan":
 		outbound = map[string]interface{}{
@@ -148,9 +178,53 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			"password":    node.Password,
 		}
 		if node.TLS {
-			outbound["tls"] = map[string]interface{}{
+			tlsConfig := map[string]interface{}{
 				"enabled": true,
 			}
+			if node.SNI != "" {
+				tlsConfig["server_name"] = node.SNI
+			}
+			if node.ALPN != "" {
+				tlsConfig["alpn"] = []string{node.ALPN}
+			}
+			outbound["tls"] = tlsConfig
+		}
+	case "hysteria":
+		outbound = map[string]interface{}{
+			"type":        "hysteria",
+			"server":      node.Server,
+			"server_port": node.Port,
+		}
+		if node.Auth != "" {
+			outbound["auth"] = node.Auth
+		}
+		if node.ObfsPassword != "" {
+			outbound["obfs"] = node.ObfsPassword
+		}
+	case "wireguard":
+		outbound = map[string]interface{}{
+			"type":        "wireguard",
+			"server":      node.Server,
+			"server_port": node.Port,
+			"private_key": node.PrivateKey,
+		}
+		if node.PublicKey != "" {
+			outbound["peer_public_key"] = node.PublicKey
+		}
+		if node.Reserved != "" {
+			// Reserved 通常是 base64 编码的 3 个字节
+			outbound["reserved"] = node.Reserved
+		}
+	case "tuic":
+		outbound = map[string]interface{}{
+			"type":        "tuic",
+			"server":      node.Server,
+			"server_port": node.Port,
+			"uuid":        node.UUID,
+			"password":    node.Password,
+		}
+		if node.Token != "" {
+			outbound["token"] = node.Token
 		}
 	default:
 		return "", fmt.Errorf("不支持的节点类型: %s", node.Type)
@@ -163,8 +237,8 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 		},
 		"inbounds": []map[string]interface{}{
 			{
-				"type": "mixed",
-				"listen": "127.0.0.1",
+				"type":        "mixed",
+				"listen":      "127.0.0.1",
 				"listen_port": 0, // 自动分配端口
 			},
 		},
@@ -175,7 +249,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			"rules": []map[string]interface{}{
 				{
 					"outbound": "proxy",
-					"default": true,
+					"default":  true,
 				},
 			},
 		},
@@ -269,7 +343,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 
 	start := time.Now()
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	
+
 	// 创建 HTTP 客户端，使用代理
 	proxyFunc := func(_ *http.Request) (*url.URL, error) {
 		return url.Parse(proxyURL)
@@ -294,7 +368,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	defer resp.Body.Close()
 
 	latency := time.Since(start)
-	
+
 	// 如果状态码是 200 或 204，说明连接成功
 	if resp.StatusCode == 200 || resp.StatusCode == 204 {
 		return latency, nil
@@ -310,4 +384,3 @@ func (c *Collector) testSpeedWithSingBox(singBoxPath, configFile string) (float6
 	// 由于实现较复杂，这里返回 0
 	return 0, nil
 }
-

@@ -23,15 +23,19 @@ jobs:
       with:
         go-version: '1.21'
         
-    - name: 安装 Sing-box（可选）
+    - name: 安装 Sing-box（如果启用）
       if: env.USE_SINGBOX == 'true'
       run: |
+        echo "📥 开始下载 sing-box 内核..."
         SINGBOX_VERSION="1.10.0-alpha.29"
         ARCH="amd64"
-        curl -Lo sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz"
+        DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz"
+        echo "下载地址: ${DOWNLOAD_URL}"
+        curl -Lo sing-box.tar.gz "${DOWNLOAD_URL}"
         tar -xzf sing-box.tar.gz
         chmod +x sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box
         sudo mv sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box /usr/local/bin/sing-box
+        echo "✅ sing-box 安装完成"
         sing-box version
         
     - name: 运行采集程序
