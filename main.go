@@ -337,7 +337,6 @@ func (c *Collector) CollectSubNodes() error {
 		"subscribe?token",
 		"clash?token",
 		"v2ray?token",
-		"update.glados", // 添加 glados 关键词
 	}
 
 	subLinks, err := c.SearchSubLinks(keywords)
@@ -392,47 +391,29 @@ func (c *Collector) CollectSubNodes() error {
 			}
 			mu.Unlock()
 
-			// 声明 nodes 变量
-			var nodes []string
-			var err error
-
-			// 检查是否是 glados 链接
-			if strings.Contains(l, "update.glados-config.com") {
-				// 解析 glados 链接
-				nodes, err = c.ParseGladosLink(l)
-				if err != nil {
-					log.Printf("glados 链接 %s 解析失败: %v", l, err)
-					result.Error = err
-					resultsChan <- result
-					return
-				}
-				result.Nodes = nodes
-				log.Printf("glados 链接 %s 解析出 %d 个节点", l, len(nodes))
-			} else {
-				// 获取订阅内容
-				content, err := c.FetchSubscription(l)
-				if err != nil {
-					result.Error = err
-					resultsChan <- result
-					return
-				}
-
-				// 解析节点
-				nodes, err = c.ParseNodes(content)
-				if err != nil {
-					log.Printf("订阅链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
-					nodes = c.extractNodesFromRawContent(content)
-					if len(nodes) == 0 {
-						result.Error = err
-						resultsChan <- result
-						return
-					}
-					log.Printf("从原始内容提取到 %d 个节点", len(nodes))
-				}
-
-				result.Nodes = nodes
-				log.Printf("订阅链接 %s 解析出 %d 个节点", l, len(nodes))
+			// 获取订阅内容
+			content, err := c.FetchSubscription(l)
+			if err != nil {
+				result.Error = err
+				resultsChan <- result
+				return
 			}
+
+			// 解析节点
+			nodes, err := c.ParseNodes(content)
+			if err != nil {
+				log.Printf("订阅链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
+				nodes = c.extractNodesFromRawContent(content)
+				if len(nodes) == 0 {
+					result.Error = err
+					resultsChan <- result
+					return
+				}
+				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
+			}
+
+			result.Nodes = nodes
+			log.Printf("订阅链接 %s 解析出 %d 个节点", l, len(nodes))
 
 			// 测试节点
 			for _, nodeLink := range nodes {
@@ -541,19 +522,42 @@ func (c *Collector) CollectSubNodes() error {
 	return c.SaveSubResults(finalValidNodes)
 }
 
-// SaveSubResults 保存订阅节点结果到 sub.txt
+// SaveSubResults 保存订阅节点结果到 sub.txt（追加模式）
 func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
-	// 创建输出文件
-	outputFile := "sub.txt"
-	file, err := os.Create(outputFile)
-	if err != nil {
-		return fmt.Errorf("创建文件失败: %v", err)
+	// 读取现有的 sub.txt 内容（如果存在）
+	existingContent := ""
+	if content, err := os.ReadFile("sub.txt"); err == nil {
+		existingContent = string(content)
 	}
-	defer file.Close()
 
-	// 写入节点
+	// 收集所有节点链接（去重）
+	var allNodes []string
+	seenNodes := make(map[string]bool)
+
+	// 先添加现有节点
+	if existingContent != "" {
+		lines := strings.Split(strings.TrimSpace(existingContent), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !seenNodes[line] {
+				seenNodes[line] = true
+				allNodes = append(allNodes, line)
+			}
+		}
+	}
+
+	// 添加新节点
 	for _, node := range nodes {
-		file.WriteString(node.Link + "\n")
+		if node.Error == nil && !seenNodes[node.Link] {
+			seenNodes[node.Link] = true
+			allNodes = append(allNodes, node.Link)
+		}
+	}
+
+	// 写入文件
+	content := strings.Join(allNodes, "\n")
+	if err := os.WriteFile("sub.txt", []byte(content), 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
 	log.Printf("结果已保存到 %s，共 %d 个节点", outputFile, len(nodes))
@@ -1230,7 +1234,7 @@ func main() {
 
 	collector := NewCollector(githubToken)
 
-	// 采集 JMS 节点（生成 nodes.txt）
+	// 第一步：采集 JMS 节点（生成 nodes.txt）
 	log.Println("========== 开始采集 JMS 节点 ==========")
 	if err := collector.Collect(); err != nil {
 		log.Printf("JMS 节点采集失败: %v", err)
@@ -1238,7 +1242,15 @@ func main() {
 		log.Println("========== JMS 节点采集完成 ==========")
 	}
 
-	// 采集订阅链接中的节点（生成 sub.txt）
+	// 第二步：采集 glados 链接中的节点（追加到 sub.txt）
+	log.Println("========== 开始采集 glados 链接节点 ==========")
+	if err := collector.CollectGladosNodes(); err != nil {
+		log.Printf("glados 节点采集失败: %v", err)
+	} else {
+		log.Println("========== glados 节点采集完成 ==========")
+	}
+
+	// 第三步：采集订阅链接中的节点（追加到 sub.txt）
 	log.Println("========== 开始采集订阅链接节点 ==========")
 	if err := collector.CollectSubNodes(); err != nil {
 		log.Printf("订阅节点采集失败: %v", err)
