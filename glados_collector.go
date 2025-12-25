@@ -11,38 +11,25 @@ import (
 
 // CollectGladosNodes 采集 glados 链接中的节点，限制最多200个可用节点
 func (c *Collector) CollectGladosNodes() error {
-	// 搜索包含 glados 链接的文件
+	// 搜索包含 glados 链接的关键词（和 JMS 搜索方式一样）
 	keywords := []string{
-		"update.glados",
+		"update.glados-config.com",
 	}
 
-	gladosLinks, err := c.SearchSubLinks(keywords)
+	// 使用 SearchGitHub 方式搜索，只提取 glados 链接
+	gladosLinks, err := c.SearchGladosLinks(keywords)
 	if err != nil {
 		return fmt.Errorf("搜索 glados 链接失败: %v", err)
 	}
 
-	// 只保留三种特定类型的 glados 链接
-	var filteredLinks []string
-	for _, link := range gladosLinks {
-		// 只采集这三种格式：
-		// 1. https://update.glados-config.com/singbox/...
-		// 2. https://update.glados-config.com/clash/...
-		// 3. https://update.glados-config.com/subscribe/.../servers
-		if strings.Contains(link, "update.glados-config.com/singbox/") ||
-			strings.Contains(link, "update.glados-config.com/clash/") ||
-			strings.Contains(link, "update.glados-config.com/subscribe/") {
-			filteredLinks = append(filteredLinks, link)
-		}
-	}
-
-	log.Printf("共找到 %d 个 glados 链接，开始采集节点（目标：200个可用节点）", len(filteredLinks))
+	log.Printf("共找到 %d 个 glados 链接，开始采集节点（目标：200个可用节点）", len(gladosLinks))
 
 	// 采集节点
 	var allValidNodes []*ValidNode
 	var allParsedNodes []string
 	seenNodeLinks := make(map[string]bool)
 	var wg sync.WaitGroup
-	resultsChan := make(chan *NodeResult, len(filteredLinks))
+	resultsChan := make(chan *NodeResult, len(gladosLinks))
 	maxValidNodes := 200 // 限制最多200个可用节点
 	var mu sync.Mutex    // 保护 allValidNodes 的并发访问
 
@@ -55,7 +42,7 @@ func (c *Collector) CollectGladosNodes() error {
 	}
 	semaphore := make(chan struct{}, maxConcurrency)
 
-	for _, link := range filteredLinks {
+	for _, link := range gladosLinks {
 		// 检查是否已达到目标节点数
 		mu.Lock()
 		currentCount := len(allValidNodes)

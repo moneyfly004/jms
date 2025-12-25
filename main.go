@@ -138,6 +138,78 @@ func (c *Collector) SearchGitHub(keywords []string) ([]string, error) {
 	return allLinks, nil
 }
 
+// SearchGladosLinks 搜索 glados 链接（类似 SearchGitHub，但只提取 glados 链接）
+func (c *Collector) SearchGladosLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 glados 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 glados 链接
+			links := c.extractGladosLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 glados 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractGladosLinks 提取 glados 链接（只提取三种特定类型）
+func (c *Collector) extractGladosLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 glados 链接（只提取 singbox、clash 和 subscribe 三种类型）
+	gladosMatches := gladosLinkPattern.FindAllString(content, -1)
+	for _, match := range gladosMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留三种特定类型的链接
+		if link != "" &&
+			(strings.Contains(link, "update.glados-config.com/singbox/") ||
+				strings.Contains(link, "update.glados-config.com/clash/") ||
+				strings.Contains(link, "update.glados-config.com/subscribe/")) &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
 // getFileContent 获取文件内容
 func (c *Collector) getFileContent(apiURL string) (string, error) {
 	var fileContent GitHubFileContent
