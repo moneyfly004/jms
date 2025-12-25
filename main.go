@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -194,21 +195,34 @@ func (c *Collector) extractSubLinks(content string) []string {
 }
 
 // SearchSubLinks 搜索订阅链接（从 GitHub 文件中），限制最多1000个
+// 按文件更新时间排序，最近更新的文件优先处理，提高获得可用节点的几率
 func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 	var allLinks []string
 	seenLinks := make(map[string]bool)
 	maxLinks := 1000 // 限制最多1000个订阅链接
 
-	for _, keyword := range keywords {
-		if len(allLinks) >= maxLinks {
-			log.Printf("已达到订阅链接数量限制（%d个），停止搜索", maxLinks)
-			break
+	// 存储所有文件项及其更新时间，用于排序
+	type fileItemWithTime struct {
+		Item        struct {
+			HTMLURL string `json:"html_url"`
+			APIURL  string `json:"url"`
+			Path    string `json:"path"`
+			Repo    struct {
+				FullName string `json:"full_name"`
+			} `json:"repository"`
+			UpdatedAt string `json:"updated_at"`
 		}
+		UpdatedTime time.Time
+	}
 
+	var allFileItems []fileItemWithTime
+
+	// 第一步：收集所有文件项
+	for _, keyword := range keywords {
 		log.Printf("正在搜索订阅链接关键词: %s", keyword)
 
-		// GitHub API 搜索代码，按更新时间排序（最新的在前）
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100&sort=indexed&order=desc", GitHubAPIBaseURL, url.QueryEscape(keyword))
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
 
 		var results GitHubSearchResult
 		if err := c.makeRequest(searchURL, &results); err != nil {
@@ -218,12 +232,8 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 
 		log.Printf("找到 %d 个结果", results.TotalCount)
 
-		// 处理每个结果（已按更新时间排序）
+		// 收集所有文件项，解析更新时间
 		for _, item := range results.Items {
-			if len(allLinks) >= maxLinks {
-				break
-			}
-
 			// 只处理 YAML、TXT、JSON 等配置文件
 			if !strings.HasSuffix(item.Path, ".yaml") &&
 				!strings.HasSuffix(item.Path, ".yml") &&
@@ -233,32 +243,64 @@ func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
 				continue
 			}
 
-			// 获取文件内容
-			fileContent, err := c.getFileContent(item.APIURL)
+			// 解析更新时间
+			updatedTime, err := time.Parse(time.RFC3339, item.UpdatedAt)
 			if err != nil {
-				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-				continue
+				// 如果解析失败，使用零时间（排在最后）
+				updatedTime = time.Time{}
 			}
 
-			// 提取订阅链接
-			links := c.extractSubLinks(fileContent)
-			for _, link := range links {
-				if len(allLinks) >= maxLinks {
-					break
-				}
-				if !seenLinks[link] {
-					seenLinks[link] = true
-					allLinks = append(allLinks, link)
-					log.Printf("发现新订阅链接 [%d/%d]: %s", len(allLinks), maxLinks, link)
-				}
-			}
+			allFileItems = append(allFileItems, fileItemWithTime{
+				Item:        item,
+				UpdatedTime: updatedTime,
+			})
 		}
 
 		// 避免速率限制
 		time.Sleep(2 * time.Second)
 	}
 
-	log.Printf("订阅链接搜索完成，共找到 %d 个订阅链接", len(allLinks))
+	// 第二步：按更新时间排序（最新的在前）
+	log.Printf("共收集到 %d 个文件，按更新时间排序（最近更新的优先）...", len(allFileItems))
+	sort.Slice(allFileItems, func(i, j int) bool {
+		return allFileItems[i].UpdatedTime.After(allFileItems[j].UpdatedTime)
+	})
+	log.Printf("排序完成，开始处理文件")
+
+	// 第三步：处理排序后的文件
+	for _, fileItem := range allFileItems {
+		if len(allLinks) >= maxLinks {
+			log.Printf("已达到订阅链接数量限制（%d个），停止处理", maxLinks)
+			break
+		}
+
+		item := fileItem.Item
+
+		// 获取文件内容
+		fileContent, err := c.getFileContent(item.APIURL)
+		if err != nil {
+			log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+			continue
+		}
+
+		// 提取订阅链接
+		links := c.extractSubLinks(fileContent)
+		for _, link := range links {
+			if len(allLinks) >= maxLinks {
+				break
+			}
+			if !seenLinks[link] {
+				seenLinks[link] = true
+				allLinks = append(allLinks, link)
+				log.Printf("发现新订阅链接 [%d/%d] (更新时间: %s): %s", 
+					len(allLinks), maxLinks, 
+					fileItem.UpdatedTime.Format("2006-01-02 15:04:05"), 
+					link)
+			}
+		}
+	}
+
+	log.Printf("订阅链接搜索完成，共找到 %d 个订阅链接（已按更新时间排序）", len(allLinks))
 	return allLinks[:min(len(allLinks), maxLinks)], nil
 }
 

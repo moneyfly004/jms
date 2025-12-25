@@ -41,20 +41,20 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	if singBoxPath == "" {
 		// 优先使用本地目录中的 sing-box
 		localPaths := []string{
-			"./sing-box-1.10.0-alpha.29-darwin-amd64/sing-box",  // macOS arm64
-			"./sing-box-1.10.0-alpha.29-linux-amd64/sing-box",    // Linux amd64
-			"./sing-box-1.10.0-alpha.29-darwin-arm64/sing-box",  // macOS arm64
-			"./sing-box",  // 当前目录
-			"sing-box",    // PATH 中
+			"./sing-box-1.10.0-alpha.29-darwin-amd64/sing-box", // macOS arm64
+			"./sing-box-1.10.0-alpha.29-linux-amd64/sing-box",  // Linux amd64
+			"./sing-box-1.10.0-alpha.29-darwin-arm64/sing-box", // macOS arm64
+			"./sing-box", // 当前目录
+			"sing-box",   // PATH 中
 		}
-		
+
 		for _, path := range localPaths {
 			if _, err := os.Stat(path); err == nil {
 				singBoxPath = path
 				break
 			}
 		}
-		
+
 		// 如果本地文件都不存在，尝试从 PATH 查找
 		if singBoxPath == "" {
 			if path, err := exec.LookPath("sing-box"); err == nil {
@@ -71,7 +71,7 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 			Error: fmt.Errorf("sing-box 未找到，请确保 sing-box 内核文件在项目目录中"),
 		}
 	}
-	
+
 	// 检查文件是否可执行
 	if _, err := os.Stat(singBoxPath); os.IsNotExist(err) {
 		return &ValidNode{
