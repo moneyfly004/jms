@@ -2,6 +2,8 @@
 
 自动化采集 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 关键词的代码资源，提取订阅链接，解析节点并进行测速，最终保存可用节点。
 
+订阅地址 https://gist.githubusercontent.com/moneyfly004/e2b2b5f89928dcb48a62d6394504a324/raw/nodes.txt
+
 ## 🚀 快速开始
 
 ### 首次设置
