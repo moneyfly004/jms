@@ -1,5 +1,9 @@
 name: 发布到 GitHub Pages
 
+# 注意：私有仓库的 GitHub Pages 在免费账户中不可用
+# 如果仓库是私有的，此工作流会失败，这是正常的
+# 请使用 GitHub Gist 方案（已自动配置在 collect-nodes.yml 中）
+
 on:
   push:
     branches:
@@ -7,6 +11,10 @@ on:
     paths:
       - 'nodes.txt'
   workflow_dispatch:
+
+# 如果仓库是私有的，此工作流会被禁用
+# 取消下面的注释来禁用此工作流
+# workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,6 +24,8 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # 如果是私有仓库，此 job 会失败，这是正常的
+    # 请使用 Gist 方案替代
     steps:
     - name: 检出代码
       uses: actions/checkout@v4

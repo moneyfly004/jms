@@ -242,14 +242,18 @@ sudo systemctl start jms-collector.timer
 https://raw.githubusercontent.com/moneyfly004/jms/main/nodes.txt
 ```
 
-### 方式三：GitHub Pages（仅公开仓库）
+### 方式三：GitHub Pages（仅公开仓库，私有仓库不可用）
 
 启用 GitHub Pages 后，订阅地址：
 ```
 https://moneyfly004.github.io/jms/nodes.txt
 ```
 
-**注意**：私有仓库的 GitHub Pages 在免费账户中不可用。
+**⚠️ 重要**：
+- 私有仓库的 GitHub Pages 在免费账户中**不可用**
+- 如果看到 Pages 工作流失败，这是正常的
+- **请使用 Gist 方案**（方式一），这是私有仓库的最佳选择
+- 详细说明见 [PAGES_ISSUE.md](PAGES_ISSUE.md)
 
 详细订阅说明请查看 [SUBSCRIPTION.md](SUBSCRIPTION.md)
 
