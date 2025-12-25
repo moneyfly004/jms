@@ -200,10 +200,11 @@ func (c *Collector) extractSubLinks(content string) []string {
 		link = strings.TrimRight(link, ".,;!?)")
 		link = strings.TrimRight(link, "\"')")
 
-		// 只保留 singbox 和 clash 两种类型的链接
+		// 只保留 singbox、clash 和 subscribe 三种类型的链接
 		if link != "" &&
 			(strings.Contains(link, "update.glados-config.com/singbox/") ||
-				strings.Contains(link, "update.glados-config.com/clash/")) &&
+				strings.Contains(link, "update.glados-config.com/clash/") ||
+				strings.Contains(link, "update.glados-config.com/subscribe/")) &&
 			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)

@@ -45,6 +45,8 @@ func (c *Collector) ParseGladosLink(link string) ([]string, error) {
 		return c.parseSingBoxLink(link)
 	} else if strings.Contains(link, "/clash/") {
 		return c.parseClashLink(link)
+	} else if strings.Contains(link, "/subscribe/") {
+		return c.parseSubscribeLink(link)
 	}
 	return nil, fmt.Errorf("不支持的 glados 链接格式: %s", link)
 }
@@ -515,5 +517,29 @@ func (c *Collector) parseNodeLinksFromContent(content string) []string {
 	}
 	
 	return nodes
+}
+
+// parseSubscribeLink 解析 subscribe 格式的链接（纯文本节点列表）
+func (c *Collector) parseSubscribeLink(link string) ([]string, error) {
+	// 获取内容
+	content, err := c.FetchSubscription(link)
+	if err != nil {
+		return nil, fmt.Errorf("获取内容失败: %v", err)
+	}
+
+	// subscribe 格式通常是纯文本，每行一个节点链接
+	// 也可能包含 base64 编码的内容
+	nodes := c.parseNodeLinksFromContent(content)
+	
+	// 如果没有找到节点链接，尝试 base64 解码
+	if len(nodes) == 0 {
+		decodedNodes, err := c.ParseNodes(content)
+		if err == nil && len(decodedNodes) > 0 {
+			nodes = decodedNodes
+		}
+	}
+
+	log.Printf("从 subscribe 链接中提取到 %d 个节点", len(nodes))
+	return nodes, nil
 }
 
