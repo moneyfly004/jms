@@ -117,7 +117,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			"server":      node.Server,
 			"server_port": node.Port,
 			"uuid":        node.UUID,
-			"security":    func() string {
+			"security": func() string {
 				if node.Security != "" {
 					return node.Security
 				}
@@ -155,20 +155,80 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 		if node.Flow != "" {
 			outbound["flow"] = node.Flow
 		}
+
+		// 传输方式配置
 		if node.Network != "" && node.Network != "tcp" {
-			outbound["network"] = node.Network
+			transportConfig := map[string]interface{}{}
+			
+			switch node.Network {
+			case "grpc":
+				transportConfig["type"] = "grpc"
+				if node.ServiceName != "" {
+					transportConfig["service_name"] = node.ServiceName
+				}
+			case "ws":
+				transportConfig["type"] = "ws"
+				if node.WSPath != "" {
+					transportConfig["path"] = node.WSPath
+				}
+				if node.WSHost != "" {
+					transportConfig["headers"] = map[string]interface{}{
+						"Host": node.WSHost,
+					}
+				}
+			case "http":
+				transportConfig["type"] = "http"
+				if node.WSPath != "" {
+					transportConfig["path"] = node.WSPath
+				}
+				if node.WSHost != "" {
+					transportConfig["host"] = []string{node.WSHost}
+				}
+			default:
+				transportConfig["type"] = node.Network
+			}
+			
+			if len(transportConfig) > 0 {
+				outbound["transport"] = transportConfig
+			}
 		}
+
+		// TLS/Reality 配置
 		if node.TLS {
-			tlsConfig := map[string]interface{}{
-				"enabled": true,
+			if node.Security == "reality" {
+				// Reality 配置
+				realityConfig := map[string]interface{}{
+					"enabled": true,
+				}
+				if node.RealityPublicKey != "" {
+					realityConfig["public_key"] = node.RealityPublicKey
+				}
+				if node.RealityShortID != "" {
+					realityConfig["short_id"] = node.RealityShortID
+				}
+				if node.SNI != "" {
+					realityConfig["server_name"] = node.SNI
+				}
+				if node.Fingerprint != "" {
+					realityConfig["fingerprint"] = node.Fingerprint
+				}
+				outbound["reality"] = realityConfig
+			} else {
+				// 标准 TLS 配置
+				tlsConfig := map[string]interface{}{
+					"enabled": true,
+				}
+				if node.SNI != "" {
+					tlsConfig["server_name"] = node.SNI
+				}
+				if node.ALPN != "" {
+					tlsConfig["alpn"] = []string{node.ALPN}
+				}
+				if node.Fingerprint != "" {
+					tlsConfig["fingerprint"] = node.Fingerprint
+				}
+				outbound["tls"] = tlsConfig
 			}
-			if node.SNI != "" {
-				tlsConfig["server_name"] = node.SNI
-			}
-			if node.ALPN != "" {
-				tlsConfig["alpn"] = []string{node.ALPN}
-			}
-			outbound["tls"] = tlsConfig
 		}
 	case "trojan":
 		outbound = map[string]interface{}{

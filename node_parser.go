@@ -39,8 +39,17 @@ type ProxyNode struct {
 	SNI      string // Server Name Indication
 	ALPN     string // Application-Layer Protocol Negotiation
 	Flow     string // VLESS Flow
-	Security string // VMess Security
+	Security string // VMess Security / VLESS Security (tls/reality)
 	AlterID  int    // VMess AlterID
+	// Reality 相关
+	RealityPublicKey string // Reality public key (pbk)
+	RealityShortID   string // Reality short ID (sid)
+	Fingerprint      string // TLS fingerprint (fp)
+	// gRPC 相关
+	ServiceName string // gRPC service name
+	// WebSocket 相关
+	WSHost string // WebSocket host
+	WSPath string // WebSocket path
 }
 
 // ParseNodeLink 解析节点链接
@@ -196,8 +205,9 @@ func parseVLESS(link string) (*ProxyNode, error) {
 		UDP:     true,
 	}
 
-	// TLS 配置
+	// Security 配置
 	security := query.Get("security")
+	node.Security = security
 	if security == "tls" || security == "xtls" || security == "reality" {
 		node.TLS = true
 	}
@@ -221,6 +231,42 @@ func parseVLESS(link string) (*ProxyNode, error) {
 	alpn := query.Get("alpn")
 	if alpn != "" {
 		node.ALPN = alpn
+	}
+
+	// Reality 配置
+	if security == "reality" {
+		pbk := query.Get("pbk")
+		if pbk != "" {
+			node.RealityPublicKey = pbk
+		}
+		sid := query.Get("sid")
+		if sid != "" {
+			node.RealityShortID = sid
+		}
+		fp := query.Get("fp")
+		if fp != "" {
+			node.Fingerprint = fp
+		}
+	}
+
+	// gRPC 配置
+	if network == "grpc" {
+		serviceName := query.Get("serviceName")
+		if serviceName != "" {
+			node.ServiceName = serviceName
+		}
+	}
+
+	// WebSocket 配置
+	if network == "ws" {
+		wsHost := query.Get("host")
+		if wsHost != "" {
+			node.WSHost = wsHost
+		}
+		wsPath := query.Get("path")
+		if wsPath != "" {
+			node.WSPath = wsPath
+		}
 	}
 
 	return node, nil
