@@ -4,32 +4,49 @@
 
 ## 🚀 快速开始
 
-### 首次设置
+### 最简单的使用方式（不需要 GitHub Token）
 
-如果你是第一次使用，请查看 [SETUP.md](SETUP.md) 了解如何：
-- 推送代码到 GitHub
-- 配置 GitHub Secrets
-- 启用自动化采集
+```bash
+cd jms采集
+go run main.go config.go node_parser.go gist.go
+```
 
-### GitHub Actions 自动化
+程序会自动：
+1. 搜索 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 的代码
+2. 提取订阅链接
+3. 解析节点并测试连通性
+4. 保存可用节点到 `nodes.txt`
 
-本项目已配置 GitHub Actions，可以**每天自动采集节点**并更新到仓库。
+### 使用 GitHub Token（推荐，更快）
 
-**设置步骤：**
-1. 在仓库 Settings → Secrets 中添加 `GITHUB_TOKEN`
-2. 启用 GitHub Actions
-3. 工作流会自动每天运行
+```bash
+export GITHUB_TOKEN=your_token_here
+go run main.go config.go node_parser.go gist.go
+```
 
-详细说明请查看 [SETUP.md](SETUP.md)
+### 推送到 GitHub 仓库
+
+```bash
+export GITHUB_TOKEN=your_token_here
+export GITHUB_REPO=your_username/your_repo
+go run main.go config.go node_parser.go gist.go
+```
+
+### 编译为可执行文件
+
+```bash
+go build -o jms-collector main.go config.go node_parser.go gist.go
+./jms-collector
+```
 
 ## 功能特性
 
 - 🔍 **GitHub 代码搜索**: 自动搜索包含目标关键词的代码
 - 🔗 **链接提取**: 从搜索结果中提取订阅链接
-- 📦 **节点解析**: 解析 base64 编码的订阅内容，提取 ss 和 vmess 节点
+- 📦 **节点解析**: 解析 base64 编码的订阅内容，提取 ss、vmess、vless、trojan、ssr 节点
 - ⚡ **节点测速**: 对节点进行 TCP 连通性测试
-- 💾 **结果保存**: 保存可用节点到本地文件
-- 🚀 **GitHub 推送**: 可选地将结果推送到 GitHub 仓库
+- 💾 **结果保存**: 默认只保存测试通过的节点
+- 🚀 **GitHub 推送**: 可选地将结果推送到 GitHub 仓库或 Gist
 
 ## 使用方法
 
@@ -37,7 +54,7 @@
 
 ```bash
 cd jms采集
-go run main.go config.go node_parser.go
+go run main.go config.go node_parser.go gist.go
 ```
 
 程序会：
@@ -52,7 +69,7 @@ go run main.go config.go node_parser.go
 
 ```bash
 export GITHUB_TOKEN=your_github_token
-go run main.go config.go node_parser.go
+go run main.go config.go node_parser.go gist.go
 ```
 
 ### 推送到 GitHub 仓库
@@ -62,7 +79,7 @@ go run main.go config.go node_parser.go
 ```bash
 export GITHUB_TOKEN=your_github_token
 export GITHUB_REPO=your_username/your_repo
-go run main.go config.go node_parser.go
+go run main.go config.go node_parser.go gist.go
 ```
 
 程序会将 `nodes.txt` 推送到指定仓库的根目录。
@@ -73,15 +90,19 @@ go run main.go config.go node_parser.go
 # 设置并发数（默认 10）
 export MAX_CONCURRENCY=20
 
-# 设置节点测试超时时间（秒，默认 5）
+# 设置节点测试超时时间（秒，默认 10）
 export TEST_TIMEOUT=10
+
+# 是否保存所有节点（包括测试失败的），默认 false（只保存测试通过的）
+export SAVE_ALL_NODES=false
 
 # 完整示例
 export GITHUB_TOKEN=your_token
 export GITHUB_REPO=username/repo
 export MAX_CONCURRENCY=20
 export TEST_TIMEOUT=10
-go run main.go config.go node_parser.go
+export SAVE_ALL_NODES=false
+go run main.go config.go node_parser.go gist.go
 ```
 
 ## 环境变量说明
@@ -90,16 +111,20 @@ go run main.go config.go node_parser.go
 |--------|------|------|--------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token | 否 | - |
 | `GITHUB_REPO` | GitHub 仓库（格式: owner/repo） | 否 | - |
+| `GIST_ID` | GitHub Gist ID（用于更新现有 Gist） | 否 | - |
+| `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 否 | 使用 `GITHUB_TOKEN` |
 | `MAX_CONCURRENCY` | 最大并发数 | 否 | 10 |
-| `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | 5 |
+| `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | 10 |
+| `SAVE_ALL_NODES` | 是否保存所有节点（包括测试失败的） | 否 | false |
 
 ## 获取 GitHub Token
 
 1. 访问 https://github.com/settings/tokens
 2. 点击 "Generate new token (classic)"
 3. 选择权限：
-   - `public_repo` (如果需要推送)
+   - `public_repo` (如果需要搜索和推送)
    - `repo` (如果需要推送到私有仓库)
+   - `gist` (如果需要创建/更新 Gist)
 4. 生成并复制 token
 
 **注意**: 即使不提供 token，程序也可以运行，但会受到 GitHub API 的速率限制。
@@ -113,6 +138,105 @@ ss://YWVzLTI1Ni1nY206YzVUYzNGN1c0NFdjQmRFREA5Ni40NS4xODguMzM6MTUxMzA#JMS-1268850
 vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAiLCJwb3J0IjoiMTUxMzAiLCJpZCI6ImRkZjg4ZjQxLWMyM2UtNDZhMC04MGZhLTA2MmJiOTBiYzg0OCIsImFpZCI6MCwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJ0bHMiOiJub25lIiwiYWRkIjoiMTk4LjM1LjQ3LjI3In0
 ...
 ```
+
+## 仓库设置指南
+
+### 1. 推送代码到 GitHub
+
+由于认证问题，你需要使用以下方式之一来推送代码：
+
+#### 方式一：使用 Personal Access Token（推荐）
+
+```bash
+# 使用 token 作为密码推送
+git push -u origin main
+# 用户名输入：你的 GitHub 用户名
+# 密码输入：你的 GitHub Personal Access Token
+```
+
+#### 方式二：使用 SSH
+
+```bash
+# 1. 生成 SSH 密钥（如果还没有）
+ssh-keygen -t ed25519 -C "your_email@example.com"
+
+# 2. 添加 SSH 密钥到 GitHub
+# 复制公钥内容
+cat ~/.ssh/id_ed25519.pub
+
+# 3. 在 GitHub 添加 SSH 密钥
+# Settings → SSH and GPG keys → New SSH key
+
+# 4. 更改远程仓库地址为 SSH
+git remote set-url origin git@github.com:your_username/your_repo.git
+
+# 5. 推送代码
+git push -u origin main
+```
+
+#### 方式三：使用 GitHub CLI
+
+```bash
+# 安装 GitHub CLI 后
+gh auth login
+git push -u origin main
+```
+
+### 2. 配置 GitHub Secrets
+
+推送代码后，需要在 GitHub 仓库中配置 Secrets：
+
+#### 步骤
+
+1. 访问仓库：https://github.com/your_username/your_repo
+2. 点击 **Settings** → **Secrets and variables** → **Actions**
+3. 点击 **New repository secret** 添加以下 Secrets：
+
+#### 必需的 Secret
+
+| Secret 名称 | 说明 | 如何获取 |
+|------------|------|----------|
+| `GITHUB_TOKEN` | GitHub Personal Access Token | 见下方说明 |
+
+#### 可选的 Secret
+
+| Secret 名称 | 说明 | 默认值 |
+|------------|------|--------|
+| `GITHUB_REPO` | 仓库名称 | `your_username/your_repo` |
+| `GIST_ID` | Gist ID（如果设置则更新现有 Gist） | - |
+| `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 使用 `GITHUB_TOKEN` |
+| `MAX_CONCURRENCY` | 最大并发数 | `10` |
+| `TEST_TIMEOUT` | 节点测试超时（秒） | `10` |
+| `SAVE_ALL_NODES` | 是否保存所有节点（包括测试失败的） | `false` |
+
+#### 获取 GitHub Token
+
+1. 访问 https://github.com/settings/tokens
+2. 点击 **Generate new token (classic)**
+3. 设置 Token 名称：`jms-collector`
+4. 选择过期时间（建议选择较长时间）
+5. 勾选以下权限：
+   - ✅ `public_repo` - 搜索公开代码
+   - ✅ `repo` - 推送代码到仓库
+   - ✅ `gist` - 创建/更新 Gist（如果使用 Gist 订阅）
+6. 点击 **Generate token**
+7. **重要**：立即复制 token（只显示一次）
+8. 在仓库 Secrets 中添加为 `GITHUB_TOKEN`
+
+### 3. 启用 GitHub Actions
+
+1. 确保代码已推送到 GitHub
+2. 访问仓库的 **Actions** 标签页
+3. 如果提示需要启用 Actions，点击 **Enable Actions**
+4. 工作流会自动在每天 UTC 02:00（北京时间 10:00）运行
+5. 也可以手动触发：**Actions** → **自动采集节点** → **Run workflow**
+
+### 4. 验证自动化
+
+1. 等待第一次自动运行完成，或手动触发一次
+2. 检查 **Actions** 标签页的运行日志
+3. 如果成功，`nodes.txt` 文件会自动更新
+4. 查看提交历史，应该能看到自动提交的记录
 
 ## 自动化运行
 
@@ -129,9 +253,12 @@ vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAi
    | Secret 名称 | 说明 | 必需 | 示例值 |
    |------------|------|------|--------|
    | `GITHUB_TOKEN` | GitHub Personal Access Token（用于搜索和推送） | 是 | `ghp_xxxxxxxxxxxx` |
-   | `GITHUB_REPO` | 仓库名称（格式: owner/repo） | 否 | `moneyfly004/jms` |
+   | `GITHUB_REPO` | 仓库名称（格式: owner/repo） | 否 | `your_username/your_repo` |
+   | `GIST_ID` | Gist ID（用于更新现有 Gist） | 否 | `e2b2b5f89928dcb48a62d6394504a324` |
+   | `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 否 | 使用 `GITHUB_TOKEN` |
    | `MAX_CONCURRENCY` | 最大并发数 | 否 | `10` |
-   | `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | `5` |
+   | `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | `10` |
+   | `SAVE_ALL_NODES` | 是否保存所有节点（包括测试失败的） | 否 | `false` |
 
    **如何获取 GITHUB_TOKEN：**
    1. 访问 https://github.com/settings/tokens
@@ -139,6 +266,7 @@ vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAi
    3. 选择权限：
       - `public_repo` (搜索代码)
       - `repo` (推送代码到仓库)
+      - `gist` (创建/更新 Gist)
    4. 生成并复制 token
    5. 在仓库 Settings → Secrets 中添加为 `GITHUB_TOKEN`
 
@@ -167,7 +295,7 @@ vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAi
 crontab -e
 
 # 添加定时任务（每天凌晨 2 点运行）
-0 2 * * * cd /path/to/goweb/jms采集 && /usr/local/go/bin/go run main.go config.go node_parser.go >> /path/to/logs/jms_collector.log 2>&1
+0 2 * * * cd /path/to/goweb/jms采集 && /usr/local/go/bin/go run main.go config.go node_parser.go gist.go >> /path/to/logs/jms_collector.log 2>&1
 ```
 
 ### 使用 systemd（Linux）
@@ -185,7 +313,7 @@ User=your_user
 WorkingDirectory=/path/to/goweb/jms采集
 Environment="GITHUB_TOKEN=your_token"
 Environment="GITHUB_REPO=username/repo"
-ExecStart=/usr/local/go/bin/go run main.go config.go node_parser.go
+ExecStart=/usr/local/go/bin/go run main.go config.go node_parser.go gist.go
 
 [Install]
 WantedBy=multi-user.target
@@ -213,49 +341,119 @@ sudo systemctl enable jms-collector.timer
 sudo systemctl start jms-collector.timer
 ```
 
-## 注意事项
-
-1. **速率限制**: 不使用 token 时，GitHub API 限制为每分钟 10 次请求
-2. **网络连接**: 节点测速需要网络连接，某些节点可能无法访问
-3. **节点有效性**: 程序只进行基本的 TCP 连通性测试，不保证节点完全可用
-4. **隐私**: 请妥善保管你的 GitHub Token，不要提交到代码仓库
-
 ## 订阅节点
 
 采集的节点可以通过以下方式订阅：
 
 ### 方式一：GitHub Gist（推荐，支持私有仓库）
 
-如果仓库是私有的，使用 GitHub Gist 提供订阅：
+**为什么使用 Gist？**
 
-1. 在仓库 Secrets 中设置 `GIST_TOKEN`（或使用 `GITHUB_TOKEN`）
-2. 可选：设置 `GIST_ID`（如果已有 Gist）
-3. 工作流会自动创建/更新 Gist
-4. 订阅地址格式：`https://gist.githubusercontent.com/{username}/{gist_id}/raw/nodes.txt`
+- ✅ **完全免费**：GitHub Gist 对所有人免费
+- ✅ **公开访问**：Gist 是公开的，无需认证即可访问
+- ✅ **自动更新**：可以通过 API 自动更新内容
+- ✅ **简单易用**：订阅地址格式简单
+- ✅ **支持私有仓库**：即使仓库是私有的，Gist 也可以公开访问
 
-详细设置请查看 [GIST_SETUP.md](GIST_SETUP.md)
+**设置步骤：**
+
+1. **配置 GitHub Secrets**
+
+   在仓库设置中添加以下 Secrets：
+
+   | Secret 名称 | 说明 | 必需 |
+   |------------|------|------|
+   | `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 是（或使用 `GITHUB_TOKEN`） |
+   | `GIST_ID` | Gist ID（可选，如果设置则更新现有 Gist） | 否 |
+
+   **注意**：如果没有设置 `GIST_ID`，程序会自动创建新的 Gist，并在日志中显示 Gist ID。
+
+   **获取 GIST_TOKEN：**
+   - `GIST_TOKEN` 可以使用你的 `GITHUB_TOKEN`（如果已经有的话）
+   - 或者单独创建一个只有 `gist` 权限的 Token
+
+2. **运行采集程序**
+
+   配置完成后，GitHub Actions 会自动运行，或者你可以手动触发：
+   - 访问：https://github.com/your_username/your_repo/actions
+   - 选择 "自动采集节点" 工作流
+   - 点击 "Run workflow"
+
+3. **获取订阅地址**
+
+   工作流运行完成后，查看日志，你会看到类似这样的输出：
+
+   ```
+   ✅ Gist 已创建，ID: abc123def456...
+   🔗 订阅地址: https://gist.githubusercontent.com/your_username/abc123def456.../raw/nodes.txt
+   🌐 Gist 页面: https://gist.github.com/your_username/abc123def456...
+   ```
+
+   **订阅地址格式**：
+   ```
+   https://gist.githubusercontent.com/{username}/{gist_id}/raw/nodes.txt
+   ```
+
+4. **保存 Gist ID（可选）**
+
+   第一次运行后，会显示 Gist ID。你可以：
+   - 在 Secrets 中添加 `GIST_ID` = `abc123def456...`
+   - 这样后续更新会使用同一个 Gist，订阅地址不变
+
+**自动更新：**
+
+配置完成后：
+- 采集工作流每天自动运行
+- 自动更新 Gist 中的节点内容
+- 订阅地址保持不变，始终指向最新的节点
+
+**在客户端中使用：**
+
+**Clash 配置**：
+```yaml
+proxy-providers:
+  jms:
+    type: http
+    url: https://gist.githubusercontent.com/your_username/{gist_id}/raw/nodes.txt
+    interval: 3600
+    path: ./profiles/jms.yaml
+```
+
+**V2Ray / Shadowsocks**：
+直接在客户端中添加订阅地址：
+```
+https://gist.githubusercontent.com/your_username/{gist_id}/raw/nodes.txt
+```
 
 ### 方式二：GitHub Raw 链接（公开仓库）
 
 如果仓库是公开的，可以直接使用：
 ```
-https://raw.githubusercontent.com/moneyfly004/jms/main/nodes.txt
+https://raw.githubusercontent.com/your_username/your_repo/main/nodes.txt
 ```
 
 ### 方式三：GitHub Pages（仅公开仓库，私有仓库不可用）
 
-启用 GitHub Pages 后，订阅地址：
-```
-https://moneyfly004.github.io/jms/nodes.txt
-```
-
 **⚠️ 重要**：
 - 私有仓库的 GitHub Pages 在免费账户中**不可用**
+- GitHub 免费账户只支持**公开仓库**的 GitHub Pages
+- 私有仓库需要 **GitHub Pro/Team/Enterprise** 账户才能使用 Pages
 - 如果看到 Pages 工作流失败，这是正常的
-- **请使用 Gist 方案**（方式一），这是私有仓库的最佳选择
-- 详细说明见 [PAGES_ISSUE.md](PAGES_ISSUE.md)
 
-详细订阅说明请查看 [SUBSCRIPTION.md](SUBSCRIPTION.md)
+**如果仓库是公开的，启用 GitHub Pages：**
+
+1. 在仓库设置中启用 Pages
+   - 访问仓库：https://github.com/your_username/your_repo
+   - 点击 **Settings** → **Pages**
+   - 在 **Source** 部分选择 **GitHub Actions** 作为源
+   - 点击 **Save**
+
+2. 订阅地址：
+   ```
+   https://your_username.github.io/your_repo/nodes.txt
+   ```
+
+**对于私有仓库，请使用 Gist 方案（方式一）**
 
 ## 私有仓库支持
 
@@ -273,8 +471,40 @@ https://moneyfly004.github.io/jms/nodes.txt
 
 3. **订阅访问**
    - 私有仓库的 Raw 链接需要认证
-   - 建议使用 GitHub Pages 或本地订阅服务器
-   - 详细说明见 [SUBSCRIPTION.md](SUBSCRIPTION.md)
+   - **推荐使用 GitHub Gist**（方式一），这是私有仓库的最佳选择
+   - 详细说明见上方"订阅节点"部分
+
+### 私有仓库订阅方案
+
+**当前方案：GitHub Gist**
+
+**工作原理：**
+
+1. **仓库完全私有**
+   - 你的代码仓库保持私有
+   - 任何人都无法看到你的代码
+   - 只有你能访问仓库
+
+2. **节点通过 Gist 公开**
+   - GitHub Actions 自动将节点推送到独立的 Gist
+   - Gist 是公开的，但**只包含节点文件**，不包含代码
+   - 别人只能看到节点列表，看不到你的采集代码
+
+3. **订阅地址**
+   - 格式：`https://gist.githubusercontent.com/{username}/{gist_id}/raw/nodes.txt`
+   - 只有这个地址是公开的
+   - 代码仓库完全隐藏
+
+**隐私保护：**
+
+| 内容 | 可见性 | 说明 |
+|------|--------|------|
+| 代码仓库 | 🔒 私有 | 完全不可见 |
+| 采集代码 | 🔒 私有 | 完全不可见 |
+| 节点列表 | 🌐 公开 | 仅节点文件，不包含代码 |
+| 订阅地址 | 🌐 公开 | 仅用于订阅节点 |
+
+**结论**：你的代码完全隐藏，只有节点列表是公开的（这是订阅必需的）。
 
 ## 故障排除
 
@@ -296,9 +526,52 @@ https://moneyfly004.github.io/jms/nodes.txt
 ### 问题: 私有仓库无法访问订阅
 
 **解决方案**:
-- 使用 GitHub Pages（推荐）
+- **使用 GitHub Gist**（推荐，见上方"订阅节点"部分）
 - 或运行本地订阅服务器
-- 详细说明见 [SUBSCRIPTION.md](SUBSCRIPTION.md)
+
+### 问题: Gist 创建/更新失败
+
+**解决方案**：
+- 检查 `GIST_TOKEN` 或 `GITHUB_TOKEN` 是否正确设置
+- 确认 Token 有 `gist` 权限
+- 查看 Actions 运行日志中的错误信息
+
+### 问题: Gist 节点数量与本地文件不一致
+
+**解决方案**：
+- 检查工作流日志，查看 Gist 推送是否成功
+- 确认 Gist ID 是否正确
+- 查看日志中的节点数量统计
+
+### 问题: Pages 工作流失败
+
+**解决方案**：
+- 如果仓库是私有的，这是正常的（私有仓库不支持免费 Pages）
+- **使用 Gist 方案**（见上方"订阅节点"部分）
+- 如果仓库是公开的，检查 Pages 设置是否正确
+
+### 问题: Actions 运行失败：Token 错误
+
+**解决方案**：
+- 检查 `GITHUB_TOKEN` Secret 是否正确设置
+- 确认 Token 有 `repo` 和 `public_repo` 权限
+- Token 是否已过期
+
+### 问题: Actions 无法推送代码
+
+**解决方案**：
+- 检查工作流的 `permissions` 配置
+- 确认 `GITHUB_TOKEN` 有写入权限
+- 查看 Actions 运行日志中的错误信息
+
+## 注意事项
+
+1. **速率限制**: 不使用 token 时，GitHub API 限制为每分钟 10 次请求
+2. **网络连接**: 节点测速需要网络连接，某些节点可能无法访问
+3. **节点有效性**: 程序只进行基本的 TCP 连通性测试，不保证节点完全可用
+4. **隐私**: 请妥善保管你的 GitHub Token，不要提交到代码仓库
+5. **默认行为**: 程序默认只保存测试通过的节点，测试失败的节点不会被保存
+6. **Gist 公开**: Gist 必须是公开的（public），才能作为订阅地址
 
 ## 许可证
 
