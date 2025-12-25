@@ -2,6 +2,26 @@
 
 自动化采集 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 关键词的代码资源，提取订阅链接，解析节点并进行测速，最终保存可用节点。
 
+## 🚀 快速开始
+
+### 首次设置
+
+如果你是第一次使用，请查看 [SETUP.md](SETUP.md) 了解如何：
+- 推送代码到 GitHub
+- 配置 GitHub Secrets
+- 启用自动化采集
+
+### GitHub Actions 自动化
+
+本项目已配置 GitHub Actions，可以**每天自动采集节点**并更新到仓库。
+
+**设置步骤：**
+1. 在仓库 Settings → Secrets 中添加 `GITHUB_TOKEN`
+2. 启用 GitHub Actions
+3. 工作流会自动每天运行
+
+详细说明请查看 [SETUP.md](SETUP.md)
+
 ## 功能特性
 
 - 🔍 **GitHub 代码搜索**: 自动搜索包含目标关键词的代码
