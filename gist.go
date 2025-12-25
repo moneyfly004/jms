@@ -29,11 +29,26 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 	if err != nil {
 		return fmt.Errorf("读取文件失败: %v", err)
 	}
+	
+	// 验证文件内容
+	contentStr := string(content)
+	fileNodeCount := len(strings.Split(strings.TrimSpace(contentStr), "\n"))
+	if strings.TrimSpace(contentStr) == "" {
+		fileNodeCount = 0
+	}
+	
+	log.Printf("📄 读取文件 %s，包含 %d 行节点", filePath, fileNodeCount)
+	log.Printf("📊 准备推送 %d 个节点到 Gist", len(nodes))
+	
+	// 验证节点数量是否一致
+	if fileNodeCount != len(nodes) {
+		log.Printf("⚠️ 警告：文件节点数 (%d) 与节点数组数 (%d) 不一致，使用文件内容", fileNodeCount, len(nodes))
+	}
 
 	// 准备 Gist 内容
 	files := map[string]interface{}{
 		"nodes.txt": map[string]string{
-			"content": string(content),
+			"content": contentStr,
 		},
 	}
 
@@ -83,6 +98,8 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		log.Printf("❌ Gist API 响应错误: HTTP %d", resp.StatusCode)
+		log.Printf("响应内容: %s", string(body))
 		return fmt.Errorf("推送失败 HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -99,6 +116,8 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 		if gistResponse.ID != "" && gistID == "" {
 			log.Printf("✅ Gist 已创建，ID: %s", gistResponse.ID)
 			log.Printf("📝 请设置环境变量 GIST_ID=%s 以便后续更新", gistResponse.ID)
+		} else if gistID != "" {
+			log.Printf("✅ Gist 已更新，ID: %s", gistID)
 		}
 		
 		if gistResponse.Files != nil && gistResponse.Files["nodes.txt"].RawURL != "" {
@@ -108,6 +127,13 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 		if gistResponse.URL != "" {
 			log.Printf("🌐 Gist 页面: %s", gistResponse.URL)
 		}
+		
+		// 验证推送的节点数量
+		if len(nodes) > 0 {
+			log.Printf("📊 已推送 %d 个节点到 Gist", len(nodes))
+		}
+	} else {
+		log.Printf("⚠️ 无法解析 Gist 响应，但推送可能已成功")
 	}
 
 	log.Printf("✅ 已成功推送到 GitHub Gist")

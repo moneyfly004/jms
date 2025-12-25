@@ -41,11 +41,27 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
+        
+        # 检查文件是否存在
+        if [ ! -f nodes.txt ]; then
+          echo "❌ nodes.txt 文件不存在"
+          exit 1
+        fi
+        
+        # 显示文件信息
+        node_count=$(wc -l < nodes.txt | tr -d ' ')
+        echo "📊 nodes.txt 包含 $node_count 个节点"
+        
+        # 添加文件并检查变化
         git add nodes.txt
+        
+        # 检查是否有未提交的更改
         if git diff --staged --quiet; then
-          echo "没有新的节点更新"
+          echo "ℹ️ 没有新的节点更新（文件内容未变化）"
         else
-          git commit -m "自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')]"
+          echo "✅ 检测到节点更新，准备提交..."
+          git commit -m "自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')] - $node_count 个节点"
           git push
+          echo "✅ 已成功推送到 GitHub"
         fi
 

@@ -539,11 +539,17 @@ func (c *Collector) SaveResults(nodes []*ValidNode) error {
 	log.Printf("结果已保存到 %s，共 %d 个节点", outputFile, len(nodes))
 
 	// 优先推送到 Gist（适用于私有仓库）
-	if gistID := os.Getenv("GIST_ID"); gistID != "" || os.Getenv("GIST_TOKEN") != "" {
+	gistID := os.Getenv("GIST_ID")
+	gistToken := os.Getenv("GIST_TOKEN")
+	if gistID != "" || gistToken != "" {
+		log.Printf("准备推送到 Gist (ID: %s)...", gistID)
 		if err := c.PushToGist(outputFile, nodes); err != nil {
-			log.Printf("推送到 Gist 失败: %v", err)
+			log.Printf("❌ 推送到 Gist 失败: %v", err)
+			// Gist 推送失败，继续推送到仓库（如果有配置）
 		} else {
-			return nil // Gist 推送成功，不再推送到仓库
+			log.Printf("✅ Gist 推送成功，本地文件已保存到 %s", outputFile)
+			// 注意：即使 Gist 推送成功，本地文件也已经保存，工作流会提交它
+			return nil // Gist 推送成功，不再推送到 GitHub API
 		}
 	}
 
@@ -579,11 +585,17 @@ func (c *Collector) SaveAllNodes(nodeLinks []string) error {
 	}
 
 	// 优先推送到 Gist（适用于私有仓库）
-	if gistID := os.Getenv("GIST_ID"); gistID != "" || os.Getenv("GIST_TOKEN") != "" {
+	gistID := os.Getenv("GIST_ID")
+	gistToken := os.Getenv("GIST_TOKEN")
+	if gistID != "" || gistToken != "" {
+		log.Printf("准备推送到 Gist (ID: %s)...", gistID)
 		if err := c.PushToGist(outputFile, nodes); err != nil {
-			log.Printf("推送到 Gist 失败: %v", err)
+			log.Printf("❌ 推送到 Gist 失败: %v", err)
+			// Gist 推送失败，继续推送到仓库（如果有配置）
 		} else {
-			return nil // Gist 推送成功，不再推送到仓库
+			log.Printf("✅ Gist 推送成功，本地文件已保存到 %s", outputFile)
+			// 注意：即使 Gist 推送成功，本地文件也已经保存，工作流会提交它
+			return nil // Gist 推送成功，不再推送到 GitHub API
 		}
 	}
 
