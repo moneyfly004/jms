@@ -1140,8 +1140,9 @@ func (c *Collector) PushToGitHub(filePath string, nodes []*ValidNode) error {
 
 func main() {
 	// 如果设置了 TEST_SINGBOX_NODES 环境变量，运行测试模式
+	// 注意：测试功能在 test_singbox.go 中，需要单独编译运行
 	if os.Getenv("TEST_SINGBOX_NODES") == "true" {
-		testSingBoxNodes()
+		log.Println("测试模式：请使用 'go run test_singbox.go main.go config.go node_parser.go gist.go singbox.go' 运行测试")
 		return
 	}
 
