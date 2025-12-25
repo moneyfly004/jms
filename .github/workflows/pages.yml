@@ -1,0 +1,35 @@
+name: 发布到 GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'nodes.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置 Pages
+      uses: actions/configure-pages@v4
+      
+    - name: 上传到 Pages
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: '.'
+        include-hidden-files: true
+        
+    - name: 部署到 GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+

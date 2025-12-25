@@ -220,6 +220,45 @@ sudo systemctl start jms-collector.timer
 3. **节点有效性**: 程序只进行基本的 TCP 连通性测试，不保证节点完全可用
 4. **隐私**: 请妥善保管你的 GitHub Token，不要提交到代码仓库
 
+## 订阅节点
+
+采集的节点可以通过以下方式订阅：
+
+### 方式一：GitHub Raw 链接（公开仓库）
+
+如果仓库是公开的，可以直接使用：
+```
+https://raw.githubusercontent.com/moneyfly004/jms/main/nodes.txt
+```
+
+### 方式二：GitHub Pages（推荐）
+
+启用 GitHub Pages 后，订阅地址：
+```
+https://moneyfly004.github.io/jms/nodes.txt
+```
+
+详细订阅说明请查看 [SUBSCRIPTION.md](SUBSCRIPTION.md)
+
+## 私有仓库支持
+
+### GitHub Actions 在私有仓库中运行
+
+**完全支持！** GitHub Actions 可以在私有仓库中正常运行：
+
+1. **默认配置即可工作**
+   - GitHub Actions 自动提供的 `GITHUB_TOKEN` 在私有仓库中有完整权限
+   - 无需额外配置即可运行
+
+2. **如果使用自定义 Token**
+   - 确保 Token 有 `repo` 权限（完整仓库访问）
+   - 搜索公开代码需要 `public_repo` 权限
+
+3. **订阅访问**
+   - 私有仓库的 Raw 链接需要认证
+   - 建议使用 GitHub Pages 或本地订阅服务器
+   - 详细说明见 [SUBSCRIPTION.md](SUBSCRIPTION.md)
+
 ## 故障排除
 
 ### 问题: 搜索失败，返回 403
@@ -236,6 +275,13 @@ sudo systemctl start jms-collector.timer
 - 确认 GitHub Token 有 `repo` 权限
 - 确认仓库名称格式正确（owner/repo）
 - 确认仓库存在且有写入权限
+
+### 问题: 私有仓库无法访问订阅
+
+**解决方案**:
+- 使用 GitHub Pages（推荐）
+- 或运行本地订阅服务器
+- 详细说明见 [SUBSCRIPTION.md](SUBSCRIPTION.md)
 
 ## 许可证
 
