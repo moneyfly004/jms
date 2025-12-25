@@ -46,6 +46,13 @@ func (c *Collector) ParseGladosLink(link string) ([]string, error) {
 	if strings.Contains(link, "/singbox/") {
 		return c.parseSingBoxLink(link)
 	} else if strings.Contains(link, "/clash/") {
+		// 将 clash 链接转换为 v2ray 链接，更容易解析
+		v2rayLink := c.convertClashToV2rayLink(link)
+		if v2rayLink != "" {
+			log.Printf("将 clash 链接转换为 v2ray 链接: %s -> %s", link, v2rayLink)
+			return c.parseV2rayLink(v2rayLink)
+		}
+		// 如果转换失败，回退到原来的 clash 解析方式
 		return c.parseClashLink(link)
 	} else if strings.Contains(link, "/subscribe/") {
 		return c.parseSubscribeLink(link)
@@ -549,6 +556,48 @@ func (c *Collector) parseNodeLinksFromContent(content string) []string {
 	}
 	
 	return nodes
+}
+
+// convertClashToV2rayLink 将 clash 链接转换为 v2ray 链接
+// 例如: https://update.glados-config.com/clash/477901/f18d16d/131560/glados.yaml
+// 转换为: https://update.glados-config.com/v2ray/477901/f18d16d/131560
+func (c *Collector) convertClashToV2rayLink(clashLink string) string {
+	// 匹配 clash 链接格式: /clash/{id1}/{id2}/{id3}/glados.yaml
+	clashPattern := regexp.MustCompile(`(/clash/([^/]+)/([^/]+)/([^/]+)/glados\.yaml)`)
+	matches := clashPattern.FindStringSubmatch(clashLink)
+	if len(matches) >= 5 {
+		// 提取 ID 部分
+		id1 := matches[2]
+		id2 := matches[3]
+		id3 := matches[4]
+		// 构建 v2ray 链接
+		v2rayPath := fmt.Sprintf("/v2ray/%s/%s/%s", id1, id2, id3)
+		// 替换 clash 路径为 v2ray 路径
+		v2rayLink := strings.Replace(clashLink, matches[1], v2rayPath, 1)
+		return v2rayLink
+	}
+	return ""
+}
+
+// parseV2rayLink 解析 v2ray 格式的链接（返回 base64 编码的节点列表）
+func (c *Collector) parseV2rayLink(link string) ([]string, error) {
+	// 获取内容
+	content, err := c.FetchSubscription(link)
+	if err != nil {
+		return nil, fmt.Errorf("获取内容失败: %v", err)
+	}
+
+	// v2ray 格式返回的是 base64 编码的节点列表
+	// 使用 ParseNodes 函数解析 base64 内容
+	nodes, err := c.ParseNodes(content)
+	if err != nil {
+		// 如果 base64 解码失败，尝试从原始内容提取节点链接
+		log.Printf("v2ray 链接 base64 解码失败: %v，尝试从原始内容提取", err)
+		nodes = c.parseNodeLinksFromContent(content)
+	}
+
+	log.Printf("从 v2ray 链接中提取到 %d 个节点", len(nodes))
+	return nodes, nil
 }
 
 // parseSubscribeLink 解析 subscribe 格式的链接（纯文本节点列表）
