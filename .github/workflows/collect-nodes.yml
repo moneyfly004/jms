@@ -23,8 +23,8 @@ jobs:
       with:
         go-version: '1.21'
         
-    - name: 安装 Sing-box（如果启用）
-      if: env.USE_SINGBOX == 'true'
+    - name: 安装 Sing-box（默认启用）
+      if: env.USE_SINGBOX != 'false'
       run: |
         echo "📥 开始下载 sing-box 内核..."
         SINGBOX_VERSION="1.10.0-alpha.29"
@@ -48,7 +48,7 @@ jobs:
         MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '10' }}
         TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '10' }}
         SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
-        USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'false' }}
+        USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
         TEST_SPEED: ${{ secrets.TEST_SPEED || 'false' }}
         SINGBOX_PATH: /usr/local/bin/sing-box
       run: |

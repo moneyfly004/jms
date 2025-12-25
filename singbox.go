@@ -29,10 +29,10 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 
 	result.Type = node.Type
 
-	// 检查是否启用 sing-box 测试
-	useSingBox := os.Getenv("USE_SINGBOX") == "true"
-	if !useSingBox {
-		// 如果未启用，回退到 TCP 测试
+	// 检查是否禁用 sing-box 测试（默认启用）
+	useSingBox := os.Getenv("USE_SINGBOX")
+	if useSingBox == "false" {
+		// 如果明确禁用，回退到 TCP 测试
 		return c.TestNode(nodeLink)
 	}
 
@@ -159,7 +159,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 		// 传输方式配置
 		if node.Network != "" && node.Network != "tcp" {
 			transportConfig := map[string]interface{}{}
-			
+
 			switch node.Network {
 			case "grpc":
 				transportConfig["type"] = "grpc"
@@ -187,7 +187,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			default:
 				transportConfig["type"] = node.Network
 			}
-			
+
 			if len(transportConfig) > 0 {
 				outbound["transport"] = transportConfig
 			}

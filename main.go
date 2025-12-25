@@ -379,12 +379,14 @@ func (c *Collector) CollectSubNodes() error {
 				
 				allParsedNodes = append(allParsedNodes, nodeLink)
 				
-				// 根据环境变量选择测试方式
+				// 根据环境变量选择测试方式（默认启用 sing-box）
 				var validNode *ValidNode
-				if os.Getenv("USE_SINGBOX") == "true" {
-					validNode = c.TestNodeWithSingBox(nodeLink)
-				} else {
+				useSingBox := os.Getenv("USE_SINGBOX")
+				if useSingBox == "false" {
 					validNode = c.TestNode(nodeLink)
+				} else {
+					// 默认使用 sing-box，如果不可用则回退到 TCP
+					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
 				if validNode.Error == nil {
 					mu.Lock()
@@ -892,12 +894,14 @@ func (c *Collector) Collect() error {
 				seenNodeLinks[nodeLink] = true
 				allParsedNodes = append(allParsedNodes, nodeLink)
 				
-				// 根据环境变量选择测试方式
+				// 根据环境变量选择测试方式（默认启用 sing-box）
 				var validNode *ValidNode
-				if os.Getenv("USE_SINGBOX") == "true" {
-					validNode = c.TestNodeWithSingBox(nodeLink)
-				} else {
+				useSingBox := os.Getenv("USE_SINGBOX")
+				if useSingBox == "false" {
 					validNode = c.TestNode(nodeLink)
+				} else {
+					// 默认使用 sing-box，如果不可用则回退到 TCP
+					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
 				if validNode.Error == nil {
 					result.ValidNodes = append(result.ValidNodes, validNode)

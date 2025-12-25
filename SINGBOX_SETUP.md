@@ -2,7 +2,7 @@
 
 ## 概述
 
-默认情况下，程序使用 TCP 连通性测试来验证节点。如果你想要使用 **sing-box** 内核进行**真实链接测速**（通过代理实际访问网站），可以按照以下步骤配置。
+**默认情况下，程序使用 sing-box 内核进行真实链接测速**（通过代理实际访问网站）。如果你想要使用更快的 TCP 连通性测试，可以禁用 sing-box。
 
 **注意**：sing-box 内核会在 GitHub Actions 中自动下载安装，无需手动操作。
 
@@ -22,15 +22,22 @@
 
 ## 配置步骤
 
-### 1. 在 GitHub Secrets 中启用
+### 1. 默认配置（推荐）
+
+**sing-box 默认已启用**，无需额外配置。工作流会自动：
+- 下载并安装 sing-box
+- 使用真实链接测速
+- 支持所有协议类型
+
+### 2. 可选配置
+
+如果需要自定义，可以在 GitHub Secrets 中设置：
 
 访问：https://github.com/moneyfly004/jms/settings/secrets/actions
 
-添加以下 Secret：
-
 | Secret 名称 | 值 | 说明 |
 |------------|-----|------|
-| `USE_SINGBOX` | `true` | 启用 sing-box 测速 |
+| `USE_SINGBOX` | `true`（默认）或 `false` | 是否启用 sing-box 测速 |
 | `TEST_URL` | `http://www.google.com/generate_204` | 测试 URL（可选） |
 | `TEST_SPEED` | `false` | 是否进行速度测试（可选） |
 
@@ -59,7 +66,7 @@
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `USE_SINGBOX` | 是否使用 sing-box 测速 | `false`（使用 TCP 测试） |
+| `USE_SINGBOX` | 是否使用 sing-box 测速 | `true`（启用 sing-box，设置为 `false` 使用 TCP 测试） |
 | `SINGBOX_PATH` | sing-box 可执行文件路径 | `/usr/local/bin/sing-box` |
 | `TEST_URL` | 测试 URL | `http://www.google.com/generate_204` |
 | `TEST_SPEED` | 是否进行速度测试 | `false` |
@@ -100,9 +107,9 @@
 - 检查节点配置是否正确
 - 某些节点可能需要特定的网络环境
 
-## 回退到 TCP 测试
+## 禁用 sing-box（使用 TCP 测试）
 
-如果不想使用 sing-box，只需：
-- 删除或设置 `USE_SINGBOX` = `false`
-- 程序会自动回退到 TCP 连通性测试
+如果不想使用 sing-box（例如节点数量很多，需要更快速度），只需：
+- 在 GitHub Secrets 中设置 `USE_SINGBOX` = `false`
+- 程序会自动回退到 TCP 连通性测试（速度更快，但只能验证端口是否开放）
 
