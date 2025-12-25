@@ -224,19 +224,32 @@ sudo systemctl start jms-collector.timer
 
 采集的节点可以通过以下方式订阅：
 
-### 方式一：GitHub Raw 链接（公开仓库）
+### 方式一：GitHub Gist（推荐，支持私有仓库）
+
+如果仓库是私有的，使用 GitHub Gist 提供订阅：
+
+1. 在仓库 Secrets 中设置 `GIST_TOKEN`（或使用 `GITHUB_TOKEN`）
+2. 可选：设置 `GIST_ID`（如果已有 Gist）
+3. 工作流会自动创建/更新 Gist
+4. 订阅地址格式：`https://gist.githubusercontent.com/{username}/{gist_id}/raw/nodes.txt`
+
+详细设置请查看 [GIST_SETUP.md](GIST_SETUP.md)
+
+### 方式二：GitHub Raw 链接（公开仓库）
 
 如果仓库是公开的，可以直接使用：
 ```
 https://raw.githubusercontent.com/moneyfly004/jms/main/nodes.txt
 ```
 
-### 方式二：GitHub Pages（推荐）
+### 方式三：GitHub Pages（仅公开仓库）
 
 启用 GitHub Pages 后，订阅地址：
 ```
 https://moneyfly004.github.io/jms/nodes.txt
 ```
+
+**注意**：私有仓库的 GitHub Pages 在免费账户中不可用。
 
 详细订阅说明请查看 [SUBSCRIPTION.md](SUBSCRIPTION.md)
 

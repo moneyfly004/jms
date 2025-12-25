@@ -536,6 +536,15 @@ func (c *Collector) SaveResults(nodes []*ValidNode) error {
 
 	log.Printf("结果已保存到 %s，共 %d 个节点", outputFile, len(nodes))
 
+	// 优先推送到 Gist（适用于私有仓库）
+	if gistID := os.Getenv("GIST_ID"); gistID != "" || os.Getenv("GIST_TOKEN") != "" {
+		if err := c.PushToGist(outputFile, nodes); err != nil {
+			log.Printf("推送到 Gist 失败: %v", err)
+		} else {
+			return nil // Gist 推送成功，不再推送到仓库
+		}
+	}
+
 	// 如果配置了 GitHub，推送到 GitHub
 	if repo := os.Getenv("GITHUB_REPO"); repo != "" {
 		return c.PushToGitHub(outputFile, nodes)
@@ -561,13 +570,23 @@ func (c *Collector) SaveAllNodes(nodeLinks []string) error {
 
 	log.Printf("结果已保存到 %s，共 %d 个节点（包括测试失败的）", outputFile, len(nodeLinks))
 
+	// 转换为 ValidNode 格式
+	var nodes []*ValidNode
+	for _, link := range nodeLinks {
+		nodes = append(nodes, &ValidNode{Link: link})
+	}
+
+	// 优先推送到 Gist（适用于私有仓库）
+	if gistID := os.Getenv("GIST_ID"); gistID != "" || os.Getenv("GIST_TOKEN") != "" {
+		if err := c.PushToGist(outputFile, nodes); err != nil {
+			log.Printf("推送到 Gist 失败: %v", err)
+		} else {
+			return nil // Gist 推送成功，不再推送到仓库
+		}
+	}
+
 	// 如果配置了 GitHub，推送到 GitHub
 	if repo := os.Getenv("GITHUB_REPO"); repo != "" {
-		// 转换为 ValidNode 格式以兼容 PushToGitHub
-		var nodes []*ValidNode
-		for _, link := range nodeLinks {
-			nodes = append(nodes, &ValidNode{Link: link})
-		}
 		return c.PushToGitHub(outputFile, nodes)
 	}
 
