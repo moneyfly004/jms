@@ -59,7 +59,7 @@ jobs:
         TEST_SPEED: ${{ secrets.TEST_SPEED || 'false' }}
         SINGBOX_PATH: ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
       run: |
-        go run main.go config.go node_parser.go gist.go singbox.go
+        go run main.go config.go node_parser.go gist.go singbox.go glados_parser.go glados_collector.go
         
     - name: 提交并推送结果
       env:
