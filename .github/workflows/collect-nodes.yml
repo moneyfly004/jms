@@ -31,7 +31,7 @@ jobs:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '10' }}
         TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '10' }}
-        SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'true' }}
+        SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
       run: |
         go run main.go config.go node_parser.go gist.go
         

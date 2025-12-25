@@ -508,13 +508,15 @@ func (c *Collector) Collect() error {
 	}
 
 	// 保存结果
-	// 检查环境变量，决定是否只保存测试通过的节点
+	// 默认只保存测试通过的节点
+	// 如果需要保存所有节点（包括测试失败的），设置 SAVE_ALL_NODES=true
 	saveAllNodes := os.Getenv("SAVE_ALL_NODES") == "true"
 	if saveAllNodes {
 		log.Printf("保存所有解析出的节点（包括测试失败的）")
 		return c.SaveAllNodes(allParsedNodes)
 	} else {
-		log.Printf("只保存测试通过的节点")
+		// 只保存测试通过的节点（Error == nil）
+		log.Printf("只保存测试通过的节点（共 %d 个）", len(allValidNodes))
 		return c.SaveResults(allValidNodes)
 	}
 }
