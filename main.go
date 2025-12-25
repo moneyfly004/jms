@@ -379,7 +379,13 @@ func (c *Collector) CollectSubNodes() error {
 				
 				allParsedNodes = append(allParsedNodes, nodeLink)
 				
-				validNode := c.TestNode(nodeLink)
+				// 根据环境变量选择测试方式
+				var validNode *ValidNode
+				if os.Getenv("USE_SINGBOX") == "true" {
+					validNode = c.TestNodeWithSingBox(nodeLink)
+				} else {
+					validNode = c.TestNode(nodeLink)
+				}
 				if validNode.Error == nil {
 					mu.Lock()
 					if len(allValidNodes) < maxValidNodes {
@@ -881,7 +887,13 @@ func (c *Collector) Collect() error {
 				seenNodeLinks[nodeLink] = true
 				allParsedNodes = append(allParsedNodes, nodeLink)
 				
-				validNode := c.TestNode(nodeLink)
+				// 根据环境变量选择测试方式
+				var validNode *ValidNode
+				if os.Getenv("USE_SINGBOX") == "true" {
+					validNode = c.TestNodeWithSingBox(nodeLink)
+				} else {
+					validNode = c.TestNode(nodeLink)
+				}
 				if validNode.Error == nil {
 					result.ValidNodes = append(result.ValidNodes, validNode)
 					allValidNodes = append(allValidNodes, validNode)

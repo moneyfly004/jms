@@ -23,6 +23,17 @@ jobs:
       with:
         go-version: '1.21'
         
+    - name: 安装 Sing-box（可选）
+      if: env.USE_SINGBOX == 'true'
+      run: |
+        SINGBOX_VERSION="1.10.0-alpha.29"
+        ARCH="amd64"
+        curl -Lo sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz"
+        tar -xzf sing-box.tar.gz
+        chmod +x sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box
+        sudo mv sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box /usr/local/bin/sing-box
+        sing-box version
+        
     - name: 运行采集程序
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,8 +44,11 @@ jobs:
         MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '10' }}
         TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '10' }}
         SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
+        USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'false' }}
+        TEST_SPEED: ${{ secrets.TEST_SPEED || 'false' }}
+        SINGBOX_PATH: /usr/local/bin/sing-box
       run: |
-        go run main.go config.go node_parser.go gist.go
+        go run main.go config.go node_parser.go gist.go singbox.go
         
     - name: 提交并推送结果
       env:
