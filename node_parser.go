@@ -191,6 +191,20 @@ func parseVMess(link string) (*ProxyNode, error) {
 		}
 	}
 
+	// WebSocket 配置（从 JSON 数据中提取）
+	if network == "ws" || network == "websocket" {
+		if path, ok := data["path"].(string); ok && path != "" {
+			node.WSPath = path
+		}
+		if host, ok := data["host"].(string); ok && host != "" {
+			// 如果 host 不是 SNI，则作为 WebSocket Host
+			if node.SNI == "" {
+				node.SNI = host
+			}
+			node.WSHost = host
+		}
+	}
+
 	return node, nil
 }
 

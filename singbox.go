@@ -93,7 +93,11 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	latency, err := c.testLatencyWithSingBox(singBoxPath, configFile)
 	if err != nil {
 		// 记录详细错误信息用于调试
-		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v", nodeLink[:min(50, len(nodeLink))], err)
+		nodeLinkShort := nodeLink
+		if len(nodeLinkShort) > 50 {
+			nodeLinkShort = nodeLinkShort[:50]
+		}
+		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v", nodeLinkShort, err)
 		result.Error = fmt.Errorf("sing-box 测试失败: %v", err)
 		return result
 	}
@@ -489,12 +493,19 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 通过代理测试真实连接
-	testURL := os.Getenv("TEST_URL")
-	if testURL == "" {
-		testURL = "http://www.google.com/generate_204"
+	// 尝试多个测试 URL，提高成功率
+	testURLs := []string{
+		"http://www.google.com/generate_204",
+		"http://www.baidu.com",
+		"http://www.cloudflare.com",
+		"http://1.1.1.1",
 	}
 
-	start := time.Now()
+	// 从环境变量读取测试 URL（如果设置了）
+	if customURL := os.Getenv("TEST_URL"); customURL != "" {
+		testURLs = []string{customURL}
+	}
+
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	// 创建 HTTP 客户端，使用代理
@@ -503,7 +514,16 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 	transport := &http.Transport{
 		Proxy: proxyFunc,
+		// 增加连接超时和响应超时
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{
+				Timeout: 10 * time.Second,
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+		ResponseHeaderTimeout: 10 * time.Second,
 	}
+
 	// 从环境变量读取超时时间
 	timeoutStr := os.Getenv("TEST_TIMEOUT")
 	timeout := 15 * time.Second
@@ -518,25 +538,49 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		Timeout:   timeout,
 	}
 
-	req, err := http.NewRequest("GET", testURL, nil)
-	if err != nil {
-		return 0, fmt.Errorf("创建请求失败: %v", err)
+	var lastErr error
+	var latency time.Duration
+
+	// 尝试多个测试 URL
+	for _, testURL := range testURLs {
+		start := time.Now()
+		req, err := http.NewRequest("GET", testURL, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("创建请求失败: %v", err)
+			continue
+		}
+
+		// 设置 User-Agent，避免某些服务器拒绝请求
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("代理连接失败: %v", err)
+			continue
+		}
+
+		latency = time.Since(start)
+		statusCode := resp.StatusCode
+		resp.Body.Close()
+
+		// 如果状态码是 200-299，说明连接成功
+		if statusCode >= 200 && statusCode < 300 {
+			return latency, nil
+		}
+
+		// 对于 502、503、504 等错误，说明代理连接成功，但目标服务器有问题
+		// 这种情况下，我们认为代理是可用的（因为代理能连接，只是目标服务器有问题）
+		if statusCode >= 500 && statusCode < 600 {
+			log.Printf("⚠️ 代理连接成功但目标服务器返回 %d，认为代理可用", statusCode)
+			return latency, nil
+		}
+
+		// 对于其他错误，继续尝试下一个 URL
+		lastErr = fmt.Errorf("HTTP 状态码: %d", statusCode)
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("代理连接失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	latency := time.Since(start)
-
-	// 如果状态码是 200、204 或其他 2xx，说明连接成功
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return latency, nil
-	}
-
-	return latency, fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
+	// 所有 URL 都失败
+	return 0, lastErr
 }
 
 // testSpeedWithSingBox 使用 sing-box 测试速度
