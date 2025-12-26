@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -493,12 +494,13 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 通过代理测试真实连接
-	// 尝试多个测试 URL，提高成功率
+	// 使用多个可靠的测试 URL，按优先级排序
 	testURLs := []string{
-		"http://www.google.com/generate_204",
-		"http://www.baidu.com",
-		"http://www.cloudflare.com",
-		"http://1.1.1.1",
+		"http://www.google.com/generate_204",  // Google 204 响应，最快
+		"http://www.cloudflare.com",            // Cloudflare，稳定
+		"http://1.1.1.1",                       // Cloudflare DNS，简单
+		"http://www.baidu.com",                 // 百度，国内可访问
+		"http://www.microsoft.com",             // 微软，备用
 	}
 
 	// 从环境变量读取测试 URL（如果设置了）
@@ -507,6 +509,15 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	// 从环境变量读取超时时间
+	timeoutStr := os.Getenv("TEST_TIMEOUT")
+	timeout := 20 * time.Second // 默认增加到 20 秒
+	if timeoutStr != "" {
+		if seconds, err := time.ParseDuration(timeoutStr + "s"); err == nil && seconds > 0 {
+			timeout = seconds
+		}
+	}
 
 	// 创建 HTTP 客户端，使用代理
 	proxyFunc := func(_ *http.Request) (*url.URL, error) {
@@ -517,20 +528,15 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		// 增加连接超时和响应超时
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{
-				Timeout: 10 * time.Second,
+				Timeout:   8 * time.Second,  // 连接超时
+				KeepAlive: 30 * time.Second, // Keep-Alive
 			}
 			return dialer.DialContext(ctx, network, addr)
 		},
-		ResponseHeaderTimeout: 10 * time.Second,
-	}
-
-	// 从环境变量读取超时时间
-	timeoutStr := os.Getenv("TEST_TIMEOUT")
-	timeout := 15 * time.Second
-	if timeoutStr != "" {
-		if seconds, err := time.ParseDuration(timeoutStr + "s"); err == nil {
-			timeout = seconds
-		}
+		ResponseHeaderTimeout: 8 * time.Second,  // 响应头超时
+		IdleConnTimeout:       30 * time.Second, // 空闲连接超时
+		DisableKeepAlives:     false,            // 启用 Keep-Alive
+		TLSHandshakeTimeout:   5 * time.Second,  // TLS 握手超时
 	}
 
 	client := &http.Client{
@@ -538,48 +544,98 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		Timeout:   timeout,
 	}
 
-	var lastErr error
-	var latency time.Duration
-
-	// 尝试多个测试 URL
-	for _, testURL := range testURLs {
-		start := time.Now()
-		req, err := http.NewRequest("GET", testURL, nil)
-		if err != nil {
-			lastErr = fmt.Errorf("创建请求失败: %v", err)
-			continue
+	// 多次测试取平均值，提高准确性
+	testCount := 2 // 默认测试 2 次
+	if testCountEnv := os.Getenv("TEST_COUNT"); testCountEnv != "" {
+		if n, err := strconv.Atoi(testCountEnv); err == nil && n > 0 && n <= 5 {
+			testCount = n
 		}
-
-		// 设置 User-Agent，避免某些服务器拒绝请求
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("代理连接失败: %v", err)
-			continue
-		}
-
-		latency = time.Since(start)
-		statusCode := resp.StatusCode
-		resp.Body.Close()
-
-		// 如果状态码是 200-299，说明连接成功
-		if statusCode >= 200 && statusCode < 300 {
-			return latency, nil
-		}
-
-		// 对于 502、503、504 等错误，说明代理连接成功，但目标服务器有问题
-		// 这种情况下，我们认为代理是可用的（因为代理能连接，只是目标服务器有问题）
-		if statusCode >= 500 && statusCode < 600 {
-			log.Printf("⚠️ 代理连接成功但目标服务器返回 %d，认为代理可用", statusCode)
-			return latency, nil
-		}
-
-		// 对于其他错误，继续尝试下一个 URL
-		lastErr = fmt.Errorf("HTTP 状态码: %d", statusCode)
 	}
 
-	// 所有 URL 都失败
+	var successfulTests []time.Duration
+	var lastErr error
+
+	// 尝试多个测试 URL，每个 URL 测试多次
+	for _, testURL := range testURLs {
+		var urlLatencies []time.Duration
+		successCount := 0
+
+		// 对每个 URL 进行多次测试
+		for i := 0; i < testCount; i++ {
+			start := time.Now()
+			req, err := http.NewRequest("GET", testURL, nil)
+			if err != nil {
+				lastErr = fmt.Errorf("创建请求失败: %v", err)
+				continue
+			}
+
+			// 设置 User-Agent 和 Accept，避免某些服务器拒绝请求
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+			req.Header.Set("Accept", "*/*")
+			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+			req.Header.Set("Connection", "keep-alive")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				// 记录错误但继续尝试
+				lastErr = fmt.Errorf("代理连接失败: %v", err)
+				continue
+			}
+
+			latency := time.Since(start)
+			statusCode := resp.StatusCode
+
+			// 读取响应体（至少读取一部分）以确保连接完全建立
+			body := make([]byte, 1024)
+			resp.Body.Read(body)
+			resp.Body.Close()
+
+			// 如果状态码是 200-299，说明连接成功
+			if statusCode >= 200 && statusCode < 300 {
+				urlLatencies = append(urlLatencies, latency)
+				successCount++
+				continue
+			}
+
+			// 对于 502、503、504 等错误，说明代理连接成功，但目标服务器有问题
+			// 这种情况下，我们认为代理是可用的（因为代理能连接，只是目标服务器有问题）
+			if statusCode >= 500 && statusCode < 600 {
+				urlLatencies = append(urlLatencies, latency)
+				successCount++
+				continue
+			}
+
+			// 对于其他错误，记录但继续
+			lastErr = fmt.Errorf("HTTP 状态码: %d", statusCode)
+		}
+
+		// 如果这个 URL 有成功的测试，计算平均延迟
+		if len(urlLatencies) > 0 {
+			var sum time.Duration
+			for _, lat := range urlLatencies {
+				sum += lat
+			}
+			avgLatency := sum / time.Duration(len(urlLatencies))
+			successfulTests = append(successfulTests, avgLatency)
+
+			// 如果成功率达到要求（至少 50%），使用这个结果
+			if successCount >= (testCount+1)/2 {
+				return avgLatency, nil
+			}
+		}
+	}
+
+	// 如果有任何成功的测试，返回平均值
+	if len(successfulTests) > 0 {
+		var sum time.Duration
+		for _, lat := range successfulTests {
+			sum += lat
+		}
+		avgLatency := sum / time.Duration(len(successfulTests))
+		return avgLatency, nil
+	}
+
+	// 所有测试都失败
 	return 0, lastErr
 }
 
