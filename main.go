@@ -41,8 +41,6 @@ var (
 	nginx24zfdLinkPattern = regexp.MustCompile(`https?://[^\s"']*nginx24zfd\.xyz/link/[^\s"']*`)
 	// 匹配 iplcme 链接的正则表达式
 	iplcmeLinkPattern = regexp.MustCompile(`https?://[^\s"']*iplcme\.com[^\s"']*`)
-	// 匹配 adfgawidhioawjd 链接的正则表达式
-	adfgawidhioawjdLinkPattern = regexp.MustCompile(`https?://[^\s"']*adfgawidhioawjd\.site/api/v1/client/[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -561,76 +559,6 @@ func (c *Collector) extractIplcmeLinks(content string) []string {
 		// 只保留包含 iplcme.com 的链接
 		if link != "" &&
 			strings.Contains(link, "iplcme.com") &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	return links
-}
-
-// SearchAdfgawidhioawjdLinks 搜索 adfgawidhioawjd 链接（类似 SearchGhelperLinks，但只提取 adfgawidhioawjd 链接）
-func (c *Collector) SearchAdfgawidhioawjdLinks(keywords []string) ([]string, error) {
-	var allLinks []string
-	seenLinks := make(map[string]bool)
-
-	for _, keyword := range keywords {
-		log.Printf("正在搜索 adfgawidhioawjd 关键词: %s", keyword)
-
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
-
-		var results GitHubSearchResult
-		if err := c.makeRequest(searchURL, &results); err != nil {
-			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
-			continue
-		}
-
-		log.Printf("找到 %d 个结果", results.TotalCount)
-
-		// 处理每个结果
-		for _, item := range results.Items {
-			// 获取文件内容
-			fileContent, err := c.getFileContent(item.APIURL)
-			if err != nil {
-				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-				continue
-			}
-
-			// 只提取 adfgawidhioawjd 链接
-			links := c.extractAdfgawidhioawjdLinks(fileContent)
-			for _, link := range links {
-				if !seenLinks[link] {
-					seenLinks[link] = true
-					allLinks = append(allLinks, link)
-					log.Printf("发现新 adfgawidhioawjd 链接: %s", link)
-				}
-			}
-		}
-
-		// 避免速率限制
-		time.Sleep(2 * time.Second)
-	}
-
-	return allLinks, nil
-}
-
-// extractAdfgawidhioawjdLinks 提取 adfgawidhioawjd 链接
-func (c *Collector) extractAdfgawidhioawjdLinks(content string) []string {
-	var links []string
-	seenLinks := make(map[string]bool)
-
-	// 提取 adfgawidhioawjd 链接（特征：adfgawidhioawjd.site/api/v1/client/）
-	adfgawidhioawjdMatches := adfgawidhioawjdLinkPattern.FindAllString(content, -1)
-	for _, match := range adfgawidhioawjdMatches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		// 只保留包含 adfgawidhioawjd.site/api/v1/client/ 的链接
-		if link != "" &&
-			strings.Contains(link, "adfgawidhioawjd.site/api/v1/client/") &&
 			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
@@ -1859,15 +1787,6 @@ func (c *Collector) CollectIplcmeNodes() error {
 	return c.collectNodesGeneric(c.SearchIplcmeLinks, "iplcme", keywords)
 }
 
-// CollectAdfgawidhioawjdNodes 采集 adfgawidhioawjd 链接中的节点，保存到 nodes.txt
-func (c *Collector) CollectAdfgawidhioawjdNodes() error {
-	keywords := []string{
-		"adfgawidhioawjd.site/api/v1/client",
-		"adfgawidhioawjd.site/api/v1/client/",
-	}
-	return c.collectNodesGeneric(c.SearchAdfgawidhioawjdLinks, "adfgawidhioawjd", keywords)
-}
-
 // SaveResults 保存结果
 func (c *Collector) SaveResults(nodes []*ValidNode) error {
 	// 创建输出文件
@@ -2118,14 +2037,6 @@ func main() {
 			log.Printf("iplcme 节点采集失败: %v", err)
 		} else {
 			log.Println("========== iplcme 节点采集完成 ==========")
-		}
-
-		// 第八步（优先）：采集 adfgawidhioawjd 链接中的节点（追加到 nodes.txt）
-		log.Println("========== 开始采集 adfgawidhioawjd 链接节点（优先） ==========")
-		if err := collector.CollectAdfgawidhioawjdNodes(); err != nil {
-			log.Printf("adfgawidhioawjd 节点采集失败: %v", err)
-		} else {
-			log.Println("========== adfgawidhioawjd 节点采集完成 ==========")
 		}
 
 		log.Println("========== 所有采集任务完成 ==========")
