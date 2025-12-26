@@ -31,6 +31,8 @@ var (
 	subLinkPattern = regexp.MustCompile(`https?://[^\s"']*/(?:api/v1/client|subscribe|sub|link|clash|v2ray)[^\s"']*`)
 	// 匹配 glados 链接的正则表达式
 	gladosLinkPattern = regexp.MustCompile(`https?://update\.glados-config\.com/(?:singbox|clash|subscribe)/[^\s"']*`)
+	// 匹配 ghelper 链接的正则表达式
+	ghelperLinkPattern = regexp.MustCompile(`https?://[^\s"']*ghelper\.me/subs/[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -184,6 +186,52 @@ func (c *Collector) SearchGladosLinks(keywords []string) ([]string, error) {
 	return allLinks, nil
 }
 
+// SearchGhelperLinks 搜索 ghelper 链接（类似 SearchGladosLinks，但只提取 ghelper 链接）
+func (c *Collector) SearchGhelperLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 ghelper 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 ghelper 链接
+			links := c.extractGhelperLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 ghelper 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
 // extractGladosLinks 提取 glados 链接（只提取三种特定类型）
 func (c *Collector) extractGladosLinks(content string) []string {
 	var links []string
@@ -201,6 +249,30 @@ func (c *Collector) extractGladosLinks(content string) []string {
 			(strings.Contains(link, "update.glados-config.com/singbox/") ||
 				strings.Contains(link, "update.glados-config.com/clash/") ||
 				strings.Contains(link, "update.glados-config.com/subscribe/")) &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// extractGhelperLinks 提取 ghelper 链接
+func (c *Collector) extractGhelperLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 ghelper 链接（特征：ghelper.me/subs/）
+	ghelperMatches := ghelperLinkPattern.FindAllString(content, -1)
+	for _, match := range ghelperMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 ghelper.me/subs/ 的链接
+		if link != "" &&
+			strings.Contains(link, "ghelper.me/subs/") &&
 			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
@@ -1159,6 +1231,223 @@ func (c *Collector) Collect() error {
 	}
 }
 
+// CollectGhelperNodes 采集 ghelper 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectGhelperNodes() error {
+	// 搜索包含 ghelper 链接的关键词
+	keywords := []string{
+		"ghelper.me/subs",
+		"ghelper.me/subs/",
+	}
+
+	// 使用 SearchGhelperLinks 搜索 ghelper 链接
+	ghelperLinks, err := c.SearchGhelperLinks(keywords)
+	if err != nil {
+		return fmt.Errorf("搜索 ghelper 链接失败: %v", err)
+	}
+
+	log.Printf("共找到 %d 个 ghelper 链接，开始采集节点", len(ghelperLinks))
+
+	// 采集节点
+	var allValidNodes []*ValidNode
+	var allParsedNodes []string            // 保存所有解析出的节点（用于去重）
+	seenNodeLinks := make(map[string]bool) // 全局去重
+	var wg sync.WaitGroup
+	resultsChan := make(chan *NodeResult, len(ghelperLinks))
+	var mu sync.Mutex // 保护并发访问
+
+	// 并发采集
+	maxConcurrency := 10
+	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
+		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
+			maxConcurrency = n
+		}
+	}
+	semaphore := make(chan struct{}, maxConcurrency) // 限制并发数
+
+	for _, link := range ghelperLinks {
+		wg.Add(1)
+		go func(l string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			result := &NodeResult{Link: l}
+
+			// 获取订阅内容
+			content, err := c.FetchSubscription(l)
+			if err != nil {
+				result.Error = err
+				resultsChan <- result
+				return
+			}
+
+			// 解析节点（即使失败也继续，尝试从原始内容提取）
+			nodes, err := c.ParseNodes(content)
+			if err != nil {
+				// 如果 base64 解码失败，尝试直接从原始内容提取节点链接
+				log.Printf("ghelper 链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
+				nodes = c.extractNodesFromRawContent(content)
+				if len(nodes) == 0 {
+					result.Error = err
+					resultsChan <- result
+					return
+				}
+				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
+			}
+
+			result.Nodes = nodes
+			log.Printf("ghelper 链接 %s 解析出 %d 个节点", l, len(nodes))
+
+			// 测试节点
+			for _, nodeLink := range nodes {
+				// 全局去重
+				mu.Lock()
+				if seenNodeLinks[nodeLink] {
+					mu.Unlock()
+					continue
+				}
+				seenNodeLinks[nodeLink] = true
+				mu.Unlock()
+				allParsedNodes = append(allParsedNodes, nodeLink)
+
+				// 默认使用 sing-box 进行真实链接测速
+				var validNode *ValidNode
+				useSingBox := os.Getenv("USE_SINGBOX")
+				if useSingBox == "false" {
+					// 只有明确禁用时才使用 TCP 测试
+					validNode = c.TestNode(nodeLink)
+				} else {
+					// 默认使用 sing-box 进行真实链接测速
+					validNode = c.TestNodeWithSingBox(nodeLink)
+				}
+				if validNode.Error == nil {
+					result.ValidNodes = append(result.ValidNodes, validNode)
+					mu.Lock()
+					allValidNodes = append(allValidNodes, validNode)
+					mu.Unlock()
+				} else {
+					// 记录测试失败的节点类型（用于统计）
+					if validNode.Type != "" {
+						result.ValidNodes = append(result.ValidNodes, validNode)
+					}
+				}
+			}
+
+			resultsChan <- result
+		}(link)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// 收集结果并统计
+	typeStats := make(map[string]int)       // 所有解析出的节点类型统计
+	validTypeStats := make(map[string]int)  // 测试通过的节点类型统计
+	failedTypeStats := make(map[string]int) // 测试失败的节点类型统计
+	totalNodes := 0
+	totalValidNodes := 0
+
+	for result := range resultsChan {
+		if result.Error != nil {
+			log.Printf("ghelper 链接 %s 处理失败: %v", result.Link, result.Error)
+		} else {
+			totalNodes += len(result.Nodes)
+			totalValidNodes += len(result.ValidNodes)
+
+			// 统计所有解析出的节点类型
+			for _, nodeLink := range result.Nodes {
+				if node, err := ParseNodeLink(nodeLink); err == nil {
+					typeStats[node.Type]++
+				}
+			}
+
+			// 统计测试结果
+			for _, validNode := range result.ValidNodes {
+				if validNode.Type != "" {
+					if validNode.Error == nil {
+						validTypeStats[validNode.Type]++
+					} else {
+						failedTypeStats[validNode.Type]++
+					}
+				}
+			}
+
+			log.Printf("ghelper 链接 %s: 共 %d 个节点，%d 个可用",
+				result.Link, len(result.Nodes), len(result.ValidNodes))
+		}
+	}
+
+	log.Printf("ghelper 节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(allValidNodes))
+	if len(typeStats) > 0 {
+		log.Printf("解析出的节点类型统计:")
+		for nodeType, count := range typeStats {
+			validCount := validTypeStats[nodeType]
+			failedCount := failedTypeStats[nodeType]
+			log.Printf("  %s: 共 %d 个 (可用: %d, 失败: %d)", nodeType, count, validCount, failedCount)
+		}
+	}
+
+	// 保存结果到 nodes.txt（追加模式，保留现有节点）
+	// 读取现有的 nodes.txt 内容（如果存在）
+	existingContent := ""
+	if content, err := os.ReadFile("nodes.txt"); err == nil {
+		existingContent = string(content)
+	}
+
+	// 收集所有节点链接（去重）
+	var allNodes []string
+	seenNodes := make(map[string]bool)
+
+	// 先添加现有节点
+	if existingContent != "" {
+		lines := strings.Split(strings.TrimSpace(existingContent), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !seenNodes[line] {
+				seenNodes[line] = true
+				allNodes = append(allNodes, line)
+			}
+		}
+	}
+
+	// 添加新的 ghelper 节点（只添加测试成功的节点）
+	for _, node := range allValidNodes {
+		if node.Error == nil && !seenNodes[node.Link] {
+			seenNodes[node.Link] = true
+			allNodes = append(allNodes, node.Link)
+		}
+	}
+
+	// 写入文件
+	outputFile := "nodes.txt"
+	content := strings.Join(allNodes, "\n")
+	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
+	}
+
+	log.Printf("ghelper 节点已保存到 %s，共 %d 个节点（包含现有节点）", outputFile, len(allNodes))
+
+	// 推送到 Gist（如果配置了）
+	gistID := os.Getenv("GIST_ID")
+	gistToken := os.Getenv("GIST_TOKEN")
+	if gistToken == "" {
+		gistToken = c.githubToken
+	}
+
+	if gistID != "" || gistToken != "" {
+		log.Printf("准备推送到 Gist (ID: %s)...", gistID)
+		if err := c.PushToGist(outputFile, allValidNodes); err != nil {
+			log.Printf("❌ 推送到 Gist 失败: %v", err)
+		} else {
+			log.Printf("✅ Gist 推送成功，本地文件已保存到 %s", outputFile)
+		}
+	}
+
+	return nil
+}
+
 // SaveResults 保存结果
 func (c *Collector) SaveResults(nodes []*ValidNode) error {
 	// 创建输出文件
@@ -1327,6 +1616,18 @@ func main() {
 
 	collector := NewCollector(githubToken)
 
+	// 如果设置了 ONLY_GHELPER 环境变量，只运行 ghelper 采集
+	if os.Getenv("ONLY_GHELPER") == "true" {
+		log.Println("========== 仅测试 ghelper 节点采集 ==========")
+		if err := collector.CollectGhelperNodes(); err != nil {
+			log.Printf("❌ ghelper 节点采集失败: %v", err)
+			os.Exit(1)
+		} else {
+			log.Println("========== ghelper 节点采集完成 ==========")
+		}
+		return
+	}
+
 	// 第一步：采集 JMS 节点（生成 nodes.txt）
 	log.Println("========== 开始采集 JMS 节点 ==========")
 	if err := collector.Collect(); err != nil {
@@ -1335,7 +1636,15 @@ func main() {
 		log.Println("========== JMS 节点采集完成 ==========")
 	}
 
-	// 第二步：采集 glados 链接中的节点（追加到 sub.txt）
+	// 第二步（优先）：采集 ghelper 链接中的节点（追加到 nodes.txt，紧跟在 JMS 之后）
+	log.Println("========== 开始采集 ghelper 链接节点（优先） ==========")
+	if err := collector.CollectGhelperNodes(); err != nil {
+		log.Printf("ghelper 节点采集失败: %v", err)
+	} else {
+		log.Println("========== ghelper 节点采集完成 ==========")
+	}
+
+	// 第三步：采集 glados 链接中的节点（追加到 sub.txt）
 	log.Println("========== 开始采集 glados 链接节点 ==========")
 	if err := collector.CollectGladosNodes(); err != nil {
 		log.Printf("glados 节点采集失败: %v", err)
@@ -1343,7 +1652,7 @@ func main() {
 		log.Println("========== glados 节点采集完成 ==========")
 	}
 
-	// 第三步：采集订阅链接中的节点（追加到 sub.txt）
+	// 第四步：采集订阅链接中的节点（追加到 sub.txt）
 	log.Println("========== 开始采集订阅链接节点 ==========")
 	if err := collector.CollectSubNodes(); err != nil {
 		log.Printf("订阅节点采集失败: %v", err)
