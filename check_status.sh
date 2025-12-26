@@ -24,12 +24,6 @@ else
     echo "⏳ nodes.txt: 尚未生成"
 fi
 
-if [ -f "sub.txt" ]; then
-    SUB_COUNT=$(wc -l < sub.txt | tr -d ' ')
-    echo "✅ sub.txt: $SUB_COUNT 个节点"
-else
-    echo "⏳ sub.txt: 尚未生成"
-fi
 echo ""
 
 # 显示最新日志

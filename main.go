@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,14 +26,24 @@ const (
 var (
 	// 匹配目标链接的正则表达式
 	linkPattern = regexp.MustCompile(`https?://(?:jmssub\.net|jjsubmarines\.com)/members/getsub\.php\?[^\s"']+`)
-	// 匹配订阅链接的正则表达式（包含 /api/v1/client 等）
-	subLinkPattern = regexp.MustCompile(`https?://[^\s"']*/(?:api/v1/client|subscribe|sub|link|clash|v2ray)[^\s"']*`)
-	// 匹配 glados 链接的正则表达式
-	gladosLinkPattern = regexp.MustCompile(`https?://update\.glados-config\.com/(?:singbox|clash|subscribe)/[^\s"']*`)
 	// 匹配 ghelper 链接的正则表达式
 	ghelperLinkPattern = regexp.MustCompile(`https?://[^\s"']*ghelper\.me/subs/[^\s"']*`)
 	// 匹配 m7r52rosihxm 链接的正则表达式
 	m7r52rosihxmLinkPattern = regexp.MustCompile(`https?://[^\s"']*m7r52rosihxm\.com[^\s"']*`)
+	// 匹配 api/v1/client 链接的正则表达式
+	apiV1ClientLinkPattern = regexp.MustCompile(`https?://[^\s"']*/api/v1/client[^\s"']*`)
+	// 匹配建森电器链接的正则表达式
+	jiansendianqiLinkPattern = regexp.MustCompile(`https?://[^\s"']*建森电器\.com[^\s"']*`)
+	// 匹配 ninjasub 链接的正则表达式
+	ninjasubLinkPattern = regexp.MustCompile(`https?://[^\s"']*ninjasub\.com/link[^\s"']*`)
+	// 匹配 xueshan 链接的正则表达式
+	xueshanLinkPattern = regexp.MustCompile(`https?://[^\s"']*xueshan\.shop/s/[^\s"']*`)
+	// 匹配 nginx24zfd 链接的正则表达式
+	nginx24zfdLinkPattern = regexp.MustCompile(`https?://[^\s"']*nginx24zfd\.xyz/link/[^\s"']*`)
+	// 匹配 iplcme 链接的正则表达式
+	iplcmeLinkPattern = regexp.MustCompile(`https?://[^\s"']*iplcme\.com[^\s"']*`)
+	// 匹配 adfgawidhioawjd 链接的正则表达式
+	adfgawidhioawjdLinkPattern = regexp.MustCompile(`https?://[^\s"']*adfgawidhioawjd\.site/api/v1/client/[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -142,53 +151,7 @@ func (c *Collector) SearchGitHub(keywords []string) ([]string, error) {
 	return allLinks, nil
 }
 
-// SearchGladosLinks 搜索 glados 链接（类似 SearchGitHub，但只提取 glados 链接）
-func (c *Collector) SearchGladosLinks(keywords []string) ([]string, error) {
-	var allLinks []string
-	seenLinks := make(map[string]bool)
-
-	for _, keyword := range keywords {
-		log.Printf("正在搜索 glados 关键词: %s", keyword)
-
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
-
-		var results GitHubSearchResult
-		if err := c.makeRequest(searchURL, &results); err != nil {
-			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
-			continue
-		}
-
-		log.Printf("找到 %d 个结果", results.TotalCount)
-
-		// 处理每个结果
-		for _, item := range results.Items {
-			// 获取文件内容
-			fileContent, err := c.getFileContent(item.APIURL)
-			if err != nil {
-				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-				continue
-			}
-
-			// 只提取 glados 链接
-			links := c.extractGladosLinks(fileContent)
-			for _, link := range links {
-				if !seenLinks[link] {
-					seenLinks[link] = true
-					allLinks = append(allLinks, link)
-					log.Printf("发现新 glados 链接: %s", link)
-				}
-			}
-		}
-
-		// 避免速率限制
-		time.Sleep(2 * time.Second)
-	}
-
-	return allLinks, nil
-}
-
-// SearchGhelperLinks 搜索 ghelper 链接（类似 SearchGladosLinks，但只提取 ghelper 链接）
+// SearchGhelperLinks 搜索 ghelper 链接
 func (c *Collector) SearchGhelperLinks(keywords []string) ([]string, error) {
 	var allLinks []string
 	seenLinks := make(map[string]bool)
@@ -232,32 +195,6 @@ func (c *Collector) SearchGhelperLinks(keywords []string) ([]string, error) {
 	}
 
 	return allLinks, nil
-}
-
-// extractGladosLinks 提取 glados 链接（只提取三种特定类型）
-func (c *Collector) extractGladosLinks(content string) []string {
-	var links []string
-	seenLinks := make(map[string]bool)
-
-	// 提取 glados 链接（只提取 singbox、clash 和 subscribe 三种类型）
-	gladosMatches := gladosLinkPattern.FindAllString(content, -1)
-	for _, match := range gladosMatches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		// 只保留三种特定类型的链接
-		if link != "" &&
-			(strings.Contains(link, "update.glados-config.com/singbox/") ||
-				strings.Contains(link, "update.glados-config.com/clash/") ||
-				strings.Contains(link, "update.glados-config.com/subscribe/")) &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	return links
 }
 
 // extractGhelperLinks 提取 ghelper 链接
@@ -354,6 +291,498 @@ func (c *Collector) extractM7r52rosihxmLinks(content string) []string {
 	return links
 }
 
+// SearchApiV1ClientLinks 搜索 api/v1/client 链接（类似 SearchGhelperLinks，但只提取 api/v1/client 链接）
+func (c *Collector) SearchApiV1ClientLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 api/v1/client 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 api/v1/client 链接
+			links := c.extractApiV1ClientLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 api/v1/client 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractApiV1ClientLinks 提取 api/v1/client 链接
+func (c *Collector) extractApiV1ClientLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 api/v1/client 链接（特征：/api/v1/client）
+	apiV1ClientMatches := apiV1ClientLinkPattern.FindAllString(content, -1)
+	for _, match := range apiV1ClientMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 /api/v1/client 的链接，排除 GitHub 相关链接
+		if link != "" &&
+			strings.Contains(link, "/api/v1/client") &&
+			!strings.Contains(link, "github.com") &&
+			!strings.Contains(link, "raw.githubusercontent.com") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchJiansendianqiLinks 搜索建森电器链接（类似 SearchGhelperLinks，但只提取建森电器链接）
+func (c *Collector) SearchJiansendianqiLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索建森电器关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取建森电器链接
+			links := c.extractJiansendianqiLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新建森电器链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractJiansendianqiLinks 提取建森电器链接
+func (c *Collector) extractJiansendianqiLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取建森电器链接（特征：建森电器.com）
+	jiansendianqiMatches := jiansendianqiLinkPattern.FindAllString(content, -1)
+	for _, match := range jiansendianqiMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含建森电器.com 的链接
+		if link != "" &&
+			strings.Contains(link, "建森电器.com") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchNinjasubLinks 搜索 ninjasub 链接（类似 SearchGhelperLinks，但只提取 ninjasub 链接）
+func (c *Collector) SearchNinjasubLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 ninjasub 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 ninjasub 链接
+			links := c.extractNinjasubLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 ninjasub 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractNinjasubLinks 提取 ninjasub 链接
+func (c *Collector) extractNinjasubLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 ninjasub 链接（特征：ninjasub.com/link）
+	ninjasubMatches := ninjasubLinkPattern.FindAllString(content, -1)
+	for _, match := range ninjasubMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 ninjasub.com/link 的链接
+		if link != "" &&
+			strings.Contains(link, "ninjasub.com/link") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchXueshanLinks 搜索 xueshan 链接（类似 SearchGhelperLinks，但只提取 xueshan 链接）
+func (c *Collector) SearchXueshanLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 xueshan 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 xueshan 链接
+			links := c.extractXueshanLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 xueshan 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractXueshanLinks 提取 xueshan 链接
+func (c *Collector) extractXueshanLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 xueshan 链接（特征：xueshan.shop/s/）
+	xueshanMatches := xueshanLinkPattern.FindAllString(content, -1)
+	for _, match := range xueshanMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 xueshan.shop/s/ 的链接
+		if link != "" &&
+			strings.Contains(link, "xueshan.shop/s/") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchNginx24zfdLinks 搜索 nginx24zfd 链接（类似 SearchGhelperLinks，但只提取 nginx24zfd 链接）
+func (c *Collector) SearchNginx24zfdLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 nginx24zfd 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 nginx24zfd 链接
+			links := c.extractNginx24zfdLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 nginx24zfd 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractNginx24zfdLinks 提取 nginx24zfd 链接
+func (c *Collector) extractNginx24zfdLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 nginx24zfd 链接（特征：nginx24zfd.xyz/link/）
+	nginx24zfdMatches := nginx24zfdLinkPattern.FindAllString(content, -1)
+	for _, match := range nginx24zfdMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 nginx24zfd.xyz/link/ 的链接
+		if link != "" &&
+			strings.Contains(link, "nginx24zfd.xyz/link/") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchIplcmeLinks 搜索 iplcme 链接（类似 SearchGhelperLinks，但只提取 iplcme 链接）
+func (c *Collector) SearchIplcmeLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 iplcme 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 iplcme 链接
+			links := c.extractIplcmeLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 iplcme 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractIplcmeLinks 提取 iplcme 链接
+func (c *Collector) extractIplcmeLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 iplcme 链接（特征：iplcme.com）
+	iplcmeMatches := iplcmeLinkPattern.FindAllString(content, -1)
+	for _, match := range iplcmeMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 iplcme.com 的链接
+		if link != "" &&
+			strings.Contains(link, "iplcme.com") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchAdfgawidhioawjdLinks 搜索 adfgawidhioawjd 链接（类似 SearchGhelperLinks，但只提取 adfgawidhioawjd 链接）
+func (c *Collector) SearchAdfgawidhioawjdLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 adfgawidhioawjd 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 只提取 adfgawidhioawjd 链接
+			links := c.extractAdfgawidhioawjdLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 adfgawidhioawjd 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractAdfgawidhioawjdLinks 提取 adfgawidhioawjd 链接
+func (c *Collector) extractAdfgawidhioawjdLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取 adfgawidhioawjd 链接（特征：adfgawidhioawjd.site/api/v1/client/）
+	adfgawidhioawjdMatches := adfgawidhioawjdLinkPattern.FindAllString(content, -1)
+	for _, match := range adfgawidhioawjdMatches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 只保留包含 adfgawidhioawjd.site/api/v1/client/ 的链接
+		if link != "" &&
+			strings.Contains(link, "adfgawidhioawjd.site/api/v1/client/") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
 // getFileContent 获取文件内容
 func (c *Collector) getFileContent(apiURL string) (string, error) {
 	var fileContent GitHubFileContent
@@ -386,552 +815,6 @@ func (c *Collector) extractLinks(content string) []string {
 		}
 	}
 	return links
-}
-
-// extractSubLinks 提取订阅链接（包含 /api/v1/client 等）
-func (c *Collector) extractSubLinks(content string) []string {
-	var links []string
-	seenLinks := make(map[string]bool)
-
-	// 提取标准订阅链接
-	matches := subLinkPattern.FindAllString(content, -1)
-	for _, match := range matches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		if link != "" &&
-			!strings.Contains(link, "github.com") &&
-			!strings.Contains(link, "raw.githubusercontent.com") &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	// 提取 glados 链接（只提取 singbox 和 clash 两种类型）
-	gladosMatches := gladosLinkPattern.FindAllString(content, -1)
-	for _, match := range gladosMatches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		// 只保留 singbox、clash 和 subscribe 三种类型的链接
-		if link != "" &&
-			(strings.Contains(link, "update.glados-config.com/singbox/") ||
-				strings.Contains(link, "update.glados-config.com/clash/") ||
-				strings.Contains(link, "update.glados-config.com/subscribe/")) &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	return links
-}
-
-// SearchSubLinks 搜索订阅链接（从 GitHub 文件中），限制最多1000个
-// 按文件更新时间排序，最近更新的文件优先处理，提高获得可用节点的几率
-func (c *Collector) SearchSubLinks(keywords []string) ([]string, error) {
-	var allLinks []string
-	seenLinks := make(map[string]bool)
-	maxLinks := 1000 // 限制最多1000个订阅链接
-
-	// 存储所有文件项及其更新时间，用于排序
-	type fileItemWithTime struct {
-		Item struct {
-			HTMLURL string `json:"html_url"`
-			APIURL  string `json:"url"`
-			Path    string `json:"path"`
-			Repo    struct {
-				FullName string `json:"full_name"`
-			} `json:"repository"`
-			UpdatedAt string `json:"updated_at"`
-		}
-		UpdatedTime time.Time
-	}
-
-	var allFileItems []fileItemWithTime
-
-	// 第一步：收集所有文件项
-	for _, keyword := range keywords {
-		log.Printf("正在搜索订阅链接关键词: %s", keyword)
-
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
-
-		var results GitHubSearchResult
-		if err := c.makeRequest(searchURL, &results); err != nil {
-			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
-			continue
-		}
-
-		log.Printf("找到 %d 个结果", results.TotalCount)
-
-		// 收集所有文件项，解析更新时间
-		for _, item := range results.Items {
-			// 只处理 YAML、TXT、JSON 等配置文件
-			if !strings.HasSuffix(item.Path, ".yaml") &&
-				!strings.HasSuffix(item.Path, ".yml") &&
-				!strings.HasSuffix(item.Path, ".txt") &&
-				!strings.HasSuffix(item.Path, ".json") &&
-				!strings.HasSuffix(item.Path, ".conf") {
-				continue
-			}
-
-			// 解析更新时间
-			updatedTime, err := time.Parse(time.RFC3339, item.UpdatedAt)
-			if err != nil {
-				// 如果解析失败，使用零时间（排在最后）
-				updatedTime = time.Time{}
-			}
-
-			allFileItems = append(allFileItems, fileItemWithTime{
-				Item:        item,
-				UpdatedTime: updatedTime,
-			})
-		}
-
-		// 避免速率限制
-		time.Sleep(2 * time.Second)
-	}
-
-	// 第二步：按更新时间排序（最新的在前）
-	log.Printf("共收集到 %d 个文件，按更新时间排序（最近更新的优先）...", len(allFileItems))
-	sort.Slice(allFileItems, func(i, j int) bool {
-		return allFileItems[i].UpdatedTime.After(allFileItems[j].UpdatedTime)
-	})
-	log.Printf("排序完成，开始处理文件")
-
-	// 第三步：处理排序后的文件
-	for _, fileItem := range allFileItems {
-		if len(allLinks) >= maxLinks {
-			log.Printf("已达到订阅链接数量限制（%d个），停止处理", maxLinks)
-			break
-		}
-
-		item := fileItem.Item
-
-		// 获取文件内容
-		fileContent, err := c.getFileContent(item.APIURL)
-		if err != nil {
-			log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-			continue
-		}
-
-		// 提取订阅链接
-		links := c.extractSubLinks(fileContent)
-		for _, link := range links {
-			if len(allLinks) >= maxLinks {
-				break
-			}
-			if !seenLinks[link] {
-				seenLinks[link] = true
-				allLinks = append(allLinks, link)
-				log.Printf("发现新订阅链接 [%d/%d] (更新时间: %s): %s",
-					len(allLinks), maxLinks,
-					fileItem.UpdatedTime.Format("2006-01-02 15:04:05"),
-					link)
-			}
-		}
-	}
-
-	log.Printf("订阅链接搜索完成，共找到 %d 个订阅链接（已按更新时间排序）", len(allLinks))
-	return allLinks[:min(len(allLinks), maxLinks)], nil
-}
-
-// min 返回两个整数中的较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// CollectSubNodes 采集订阅链接中的节点，限制最多200个可用节点
-func (c *Collector) CollectSubNodes() error {
-	// 搜索包含订阅链接的文件
-	keywords := []string{
-		"api/v1/client/subscribe",
-		"sub-urls-remote",
-		"sub-urls:",
-		"subscribe?token",
-		"clash?token",
-		"v2ray?token",
-	}
-
-	subLinks, err := c.SearchSubLinks(keywords)
-	if err != nil {
-		return fmt.Errorf("搜索订阅链接失败: %v", err)
-	}
-
-	log.Printf("共找到 %d 个订阅链接，开始采集节点（目标：200个可用节点）", len(subLinks))
-
-	// 采集节点
-	var allValidNodes []*ValidNode
-	var allParsedNodes []string
-	seenNodeLinks := make(map[string]bool)
-	var wg sync.WaitGroup
-	resultsChan := make(chan *NodeResult, len(subLinks))
-	maxValidNodes := 200 // 限制最多200个可用节点
-	var mu sync.Mutex    // 保护 allValidNodes 的并发访问
-
-	// 并发采集
-	maxConcurrency := 10
-	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
-		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
-			maxConcurrency = n
-		}
-	}
-	semaphore := make(chan struct{}, maxConcurrency)
-
-	for _, link := range subLinks {
-		// 检查是否已达到目标节点数
-		mu.Lock()
-		currentCount := len(allValidNodes)
-		mu.Unlock()
-
-		if currentCount >= maxValidNodes {
-			log.Printf("已达到目标节点数（%d个），停止采集新的订阅链接", maxValidNodes)
-			break
-		}
-
-		wg.Add(1)
-		go func(l string) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			result := &NodeResult{Link: l}
-
-			// 再次检查是否已达到目标（避免不必要的请求）
-			mu.Lock()
-			if len(allValidNodes) >= maxValidNodes {
-				mu.Unlock()
-				return
-			}
-			mu.Unlock()
-
-			// 获取订阅内容
-			content, err := c.FetchSubscription(l)
-			if err != nil {
-				result.Error = err
-				resultsChan <- result
-				return
-			}
-
-			// 解析节点
-			nodes, err := c.ParseNodes(content)
-			if err != nil {
-				log.Printf("订阅链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
-				nodes = c.extractNodesFromRawContent(content)
-				if len(nodes) == 0 {
-					result.Error = err
-					resultsChan <- result
-					return
-				}
-				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
-			}
-
-			result.Nodes = nodes
-			log.Printf("订阅链接 %s 解析出 %d 个节点", l, len(nodes))
-
-			// 测试节点
-			for _, nodeLink := range nodes {
-				// 检查是否已达到目标节点数
-				mu.Lock()
-				if len(allValidNodes) >= maxValidNodes {
-					mu.Unlock()
-					break
-				}
-				mu.Unlock()
-
-				// 全局去重
-				mu.Lock()
-				if seenNodeLinks[nodeLink] {
-					mu.Unlock()
-					continue
-				}
-				seenNodeLinks[nodeLink] = true
-				mu.Unlock()
-
-				allParsedNodes = append(allParsedNodes, nodeLink)
-
-				// 默认使用 sing-box 进行真实链接测速
-				var validNode *ValidNode
-				useSingBox := os.Getenv("USE_SINGBOX")
-				if useSingBox == "false" {
-					// 只有明确禁用时才使用 TCP 测试
-					validNode = c.TestNode(nodeLink)
-				} else {
-					// 默认使用 sing-box 进行真实链接测速
-					validNode = c.TestNodeWithSingBox(nodeLink)
-				}
-				if validNode.Error == nil {
-					mu.Lock()
-					if len(allValidNodes) < maxValidNodes {
-						result.ValidNodes = append(result.ValidNodes, validNode)
-						allValidNodes = append(allValidNodes, validNode)
-						currentCount := len(allValidNodes)
-						mu.Unlock()
-						log.Printf("✅ 可用节点: %d/%d", currentCount, maxValidNodes)
-					} else {
-						mu.Unlock()
-					}
-				}
-			}
-
-			resultsChan <- result
-		}(link)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultsChan)
-	}()
-
-	// 收集结果并统计
-	typeStats := make(map[string]int)
-	validTypeStats := make(map[string]int)
-	totalNodes := 0
-	totalValidNodes := 0
-
-	for result := range resultsChan {
-		if result.Error != nil {
-			log.Printf("订阅链接 %s 处理失败: %v", result.Link, result.Error)
-		} else {
-			totalNodes += len(result.Nodes)
-			totalValidNodes += len(result.ValidNodes)
-
-			// 统计节点类型
-			for _, nodeLink := range result.Nodes {
-				if node, err := ParseNodeLink(nodeLink); err == nil {
-					typeStats[node.Type]++
-				}
-			}
-
-			// 统计测试结果
-			for _, validNode := range result.ValidNodes {
-				if validNode.Type != "" && validNode.Error == nil {
-					validTypeStats[validNode.Type]++
-				}
-			}
-
-			log.Printf("订阅链接 %s: 共 %d 个节点，%d 个可用",
-				result.Link, len(result.Nodes), len(result.ValidNodes))
-		}
-	}
-
-	// 限制最终节点数量为200个
-	finalValidNodes := allValidNodes
-	if len(allValidNodes) > 200 {
-		finalValidNodes = allValidNodes[:200]
-		log.Printf("节点数量超过200个，只保留前200个")
-	}
-
-	log.Printf("订阅节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(finalValidNodes))
-	if len(typeStats) > 0 {
-		log.Printf("解析出的节点类型统计:")
-		for nodeType, count := range typeStats {
-			validCount := validTypeStats[nodeType]
-			log.Printf("  %s: 共 %d 个 (可用: %d)", nodeType, count, validCount)
-		}
-	}
-
-	// 保存结果到 sub.txt
-	log.Printf("保存订阅节点到 sub.txt（共 %d 个可用节点）", len(finalValidNodes))
-	return c.SaveSubResults(finalValidNodes)
-}
-
-// SaveSubResults 保存订阅节点结果到 sub.txt（追加模式）
-func (c *Collector) SaveSubResults(nodes []*ValidNode) error {
-	// 读取现有的 sub.txt 内容（如果存在）
-	existingContent := ""
-	if content, err := os.ReadFile("sub.txt"); err == nil {
-		existingContent = string(content)
-	}
-
-	// 收集所有节点链接（去重）
-	var allNodes []string
-	seenNodes := make(map[string]bool)
-
-	// 先添加现有节点
-	if existingContent != "" {
-		lines := strings.Split(strings.TrimSpace(existingContent), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" && !seenNodes[line] {
-				seenNodes[line] = true
-				allNodes = append(allNodes, line)
-			}
-		}
-	}
-
-	// 添加新节点（只添加测试成功且没有超时的节点）
-	for _, node := range nodes {
-		// 检查节点是否有错误，包括超时错误
-		if node.Error != nil {
-			// 检查是否是超时错误
-			errorStr := node.Error.Error()
-			if strings.Contains(errorStr, "timeout") ||
-				strings.Contains(errorStr, "deadline exceeded") ||
-				strings.Contains(errorStr, "超时") {
-				log.Printf("⚠️ 跳过超时节点: %s", node.Link)
-				continue
-			}
-			// 其他错误也跳过
-			continue
-		}
-
-		// 只保存没有错误的节点
-		if !seenNodes[node.Link] {
-			seenNodes[node.Link] = true
-			allNodes = append(allNodes, node.Link)
-		}
-	}
-
-	// 写入文件
-	outputFile := "sub.txt"
-	content := strings.Join(allNodes, "\n")
-	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
-		return fmt.Errorf("写入文件失败: %v", err)
-	}
-
-	log.Printf("结果已保存到 %s，共 %d 个节点（包含现有节点）", outputFile, len(allNodes))
-
-	// 优先推送到 Gist（使用 SUB_GIST_ID）
-	subGistID := os.Getenv("SUB_GIST_ID")
-	gistToken := os.Getenv("GIST_TOKEN")
-	if gistToken == "" {
-		gistToken = c.githubToken
-	}
-
-	if subGistID != "" || gistToken != "" {
-		log.Printf("准备推送到订阅 Gist (ID: %s)...", subGistID)
-		if err := c.PushToSubGist(outputFile, nodes, subGistID, gistToken); err != nil {
-			log.Printf("❌ 推送到订阅 Gist 失败: %v", err)
-		} else {
-			log.Printf("✅ 订阅 Gist 推送成功，本地文件已保存到 %s", outputFile)
-			return nil
-		}
-	}
-
-	return nil
-}
-
-// PushToSubGist 推送订阅节点到 GitHub Gist
-func (c *Collector) PushToSubGist(filePath string, nodes []*ValidNode, gistID, gistToken string) error {
-	if gistToken == "" {
-		return fmt.Errorf("需要 GIST_TOKEN 或 GITHUB_TOKEN 才能推送到 Gist")
-	}
-
-	// 读取文件内容
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("读取文件失败: %v", err)
-	}
-
-	contentStr := string(content)
-	fileNodeCount := len(strings.Split(strings.TrimSpace(contentStr), "\n"))
-	if strings.TrimSpace(contentStr) == "" {
-		fileNodeCount = 0
-	}
-
-	log.Printf("📄 读取文件 %s，包含 %d 行节点", filePath, fileNodeCount)
-	log.Printf("📊 准备推送 %d 个节点到订阅 Gist", len(nodes))
-
-	// 准备 Gist 内容
-	files := map[string]interface{}{
-		"sub.txt": map[string]string{
-			"content": contentStr,
-		},
-	}
-
-	payload := map[string]interface{}{
-		"description": fmt.Sprintf("JMS 订阅节点列表 - %d 个节点", len(nodes)),
-		"public":      true,
-		"files":       files,
-	}
-
-	var apiURL string
-	if gistID == "" {
-		// 创建新的 Gist
-		apiURL = "https://api.github.com/gists"
-	} else {
-		// 更新现有的 Gist
-		apiURL = fmt.Sprintf("https://api.github.com/gists/%s", gistID)
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("JSON 编码失败: %v", err)
-	}
-
-	// 创建请求
-	method := "POST"
-	if gistID != "" {
-		method = "PATCH"
-	}
-
-	req, err := http.NewRequest(method, apiURL, strings.NewReader(string(jsonData)))
-	if err != nil {
-		return fmt.Errorf("创建请求失败: %v", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+gistToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	// 发送请求
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-		log.Printf("❌ Gist API 响应错误: HTTP %d", resp.StatusCode)
-		log.Printf("响应内容: %s", string(body))
-		return fmt.Errorf("推送失败 HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	// 解析响应获取 Gist ID
-	var gistResponse struct {
-		ID    string `json:"id"`
-		URL   string `json:"html_url"`
-		Files map[string]struct {
-			RawURL string `json:"raw_url"`
-		} `json:"files"`
-	}
-
-	if err := json.Unmarshal(body, &gistResponse); err == nil {
-		if gistResponse.ID != "" && gistID == "" {
-			log.Printf("✅ 订阅 Gist 已创建，ID: %s", gistResponse.ID)
-			log.Printf("📝 请设置环境变量 SUB_GIST_ID=%s 以便后续更新", gistResponse.ID)
-		} else if gistID != "" {
-			log.Printf("✅ 订阅 Gist 已更新，ID: %s", gistID)
-		}
-
-		if gistResponse.Files != nil && gistResponse.Files["sub.txt"].RawURL != "" {
-			log.Printf("🔗 订阅地址: %s", gistResponse.Files["sub.txt"].RawURL)
-		}
-
-		if gistResponse.URL != "" {
-			log.Printf("🌐 Gist 页面: %s", gistResponse.URL)
-		}
-
-		// 验证推送的节点数量
-		if len(nodes) > 0 {
-			log.Printf("📊 已推送 %d 个节点到订阅 Gist", len(nodes))
-		}
-	} else {
-		log.Printf("⚠️ 无法解析 Gist 响应，但推送可能已成功")
-	}
-
-	log.Printf("✅ 已成功推送到订阅 GitHub Gist")
-	return nil
 }
 
 // extractNodesFromRawContent 从原始内容中提取节点链接（不进行 base64 解码）
@@ -1303,29 +1186,26 @@ func (c *Collector) Collect() error {
 	}
 }
 
-// CollectGhelperNodes 采集 ghelper 链接中的节点，保存到 nodes.txt
-func (c *Collector) CollectGhelperNodes() error {
-	// 搜索包含 ghelper 链接的关键词
-	keywords := []string{
-		"ghelper.me/subs",
-		"ghelper.me/subs/",
-	}
-
-	// 使用 SearchGhelperLinks 搜索 ghelper 链接
-	ghelperLinks, err := c.SearchGhelperLinks(keywords)
+// collectNodesGeneric 通用的节点采集函数，提取所有重复的采集逻辑
+// searchFunc: 搜索链接的函数
+// name: 采集器名称（用于日志）
+// keywords: 搜索关键词列表
+func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, error), name string, keywords []string) error {
+	// 搜索链接
+	links, err := searchFunc(keywords)
 	if err != nil {
-		return fmt.Errorf("搜索 ghelper 链接失败: %v", err)
+		return fmt.Errorf("搜索 %s 链接失败: %v", name, err)
 	}
 
-	log.Printf("共找到 %d 个 ghelper 链接，开始采集节点", len(ghelperLinks))
+	log.Printf("共找到 %d 个 %s 链接，开始采集节点", len(links), name)
 
 	// 采集节点
 	var allValidNodes []*ValidNode
-	var allParsedNodes []string            // 保存所有解析出的节点（用于去重）
-	seenNodeLinks := make(map[string]bool) // 全局去重
+	var allParsedNodes []string
+	seenNodeLinks := make(map[string]bool)
 	var wg sync.WaitGroup
-	resultsChan := make(chan *NodeResult, len(ghelperLinks))
-	var mu sync.Mutex // 保护并发访问
+	resultsChan := make(chan *NodeResult, len(links))
+	var mu sync.Mutex
 
 	// 并发采集
 	maxConcurrency := 10
@@ -1334,9 +1214,9 @@ func (c *Collector) CollectGhelperNodes() error {
 			maxConcurrency = n
 		}
 	}
-	semaphore := make(chan struct{}, maxConcurrency) // 限制并发数
+	semaphore := make(chan struct{}, maxConcurrency)
 
-	for _, link := range ghelperLinks {
+	for _, link := range links {
 		wg.Add(1)
 		go func(l string) {
 			defer wg.Done()
@@ -1356,8 +1236,7 @@ func (c *Collector) CollectGhelperNodes() error {
 			// 解析节点（即使失败也继续，尝试从原始内容提取）
 			nodes, err := c.ParseNodes(content)
 			if err != nil {
-				// 如果 base64 解码失败，尝试直接从原始内容提取节点链接
-				log.Printf("ghelper 链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
+				log.Printf("%s 链接 %s 解析失败: %v，尝试从原始内容提取", name, l, err)
 				nodes = c.extractNodesFromRawContent(content)
 				if len(nodes) == 0 {
 					result.Error = err
@@ -1368,7 +1247,7 @@ func (c *Collector) CollectGhelperNodes() error {
 			}
 
 			result.Nodes = nodes
-			log.Printf("ghelper 链接 %s 解析出 %d 个节点", l, len(nodes))
+			log.Printf("%s 链接 %s 解析出 %d 个节点", name, l, len(nodes))
 
 			// 测试节点
 			for _, nodeLink := range nodes {
@@ -1386,10 +1265,8 @@ func (c *Collector) CollectGhelperNodes() error {
 				var validNode *ValidNode
 				useSingBox := os.Getenv("USE_SINGBOX")
 				if useSingBox == "false" {
-					// 只有明确禁用时才使用 TCP 测试
 					validNode = c.TestNode(nodeLink)
 				} else {
-					// 默认使用 sing-box 进行真实链接测速
 					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
 				if validNode.Error == nil {
@@ -1415,15 +1292,15 @@ func (c *Collector) CollectGhelperNodes() error {
 	}()
 
 	// 收集结果并统计
-	typeStats := make(map[string]int)       // 所有解析出的节点类型统计
-	validTypeStats := make(map[string]int)  // 测试通过的节点类型统计
-	failedTypeStats := make(map[string]int) // 测试失败的节点类型统计
+	typeStats := make(map[string]int)
+	validTypeStats := make(map[string]int)
+	failedTypeStats := make(map[string]int)
 	totalNodes := 0
 	totalValidNodes := 0
 
 	for result := range resultsChan {
 		if result.Error != nil {
-			log.Printf("ghelper 链接 %s 处理失败: %v", result.Link, result.Error)
+			log.Printf("%s 链接 %s 处理失败: %v", name, result.Link, result.Error)
 		} else {
 			totalNodes += len(result.Nodes)
 			totalValidNodes += len(result.ValidNodes)
@@ -1446,12 +1323,12 @@ func (c *Collector) CollectGhelperNodes() error {
 				}
 			}
 
-			log.Printf("ghelper 链接 %s: 共 %d 个节点，%d 个可用",
-				result.Link, len(result.Nodes), len(result.ValidNodes))
+			log.Printf("%s 链接 %s: 共 %d 个节点，%d 个可用",
+				name, result.Link, len(result.Nodes), len(result.ValidNodes))
 		}
 	}
 
-	log.Printf("ghelper 节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(allValidNodes))
+	log.Printf("%s 节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", name, totalNodes, len(allParsedNodes), len(allValidNodes))
 	if len(typeStats) > 0 {
 		log.Printf("解析出的节点类型统计:")
 		for nodeType, count := range typeStats {
@@ -1462,6 +1339,11 @@ func (c *Collector) CollectGhelperNodes() error {
 	}
 
 	// 保存结果到 nodes.txt（追加模式，保留现有节点）
+	return c.saveNodesToFile(allValidNodes, name)
+}
+
+// saveNodesToFile 保存节点到 nodes.txt 文件（追加模式）
+func (c *Collector) saveNodesToFile(allValidNodes []*ValidNode, name string) error {
 	// 读取现有的 nodes.txt 内容（如果存在）
 	existingContent := ""
 	if content, err := os.ReadFile("nodes.txt"); err == nil {
@@ -1484,7 +1366,7 @@ func (c *Collector) CollectGhelperNodes() error {
 		}
 	}
 
-	// 添加新的 ghelper 节点（只添加测试成功的节点）
+	// 添加新的节点（只添加测试成功的节点）
 	for _, node := range allValidNodes {
 		if node.Error == nil && !seenNodes[node.Link] {
 			seenNodes[node.Link] = true
@@ -1499,7 +1381,7 @@ func (c *Collector) CollectGhelperNodes() error {
 		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
-	log.Printf("ghelper 节点已保存到 %s，共 %d 个节点（包含现有节点）", outputFile, len(allNodes))
+	log.Printf("%s 节点已保存到 %s，共 %d 个节点（包含现有节点）", name, outputFile, len(allNodes))
 
 	// 推送到 Gist（如果配置了）
 	gistID := os.Getenv("GIST_ID")
@@ -1520,220 +1402,84 @@ func (c *Collector) CollectGhelperNodes() error {
 	return nil
 }
 
+// CollectGhelperNodes 采集 ghelper 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectGhelperNodes() error {
+	keywords := []string{
+		"ghelper.me/subs",
+		"ghelper.me/subs/",
+	}
+	return c.collectNodesGeneric(c.SearchGhelperLinks, "ghelper", keywords)
+}
+
 // CollectM7r52rosihxmNodes 采集 m7r52rosihxm 链接中的节点，保存到 nodes.txt
 func (c *Collector) CollectM7r52rosihxmNodes() error {
-	// 搜索包含 m7r52rosihxm 链接的关键词
 	keywords := []string{
 		"m7r52rosihxm.com",
 	}
+	return c.collectNodesGeneric(c.SearchM7r52rosihxmLinks, "m7r52rosihxm", keywords)
+}
 
-	// 使用 SearchM7r52rosihxmLinks 搜索 m7r52rosihxm 链接
-	m7r52rosihxmLinks, err := c.SearchM7r52rosihxmLinks(keywords)
-	if err != nil {
-		return fmt.Errorf("搜索 m7r52rosihxm 链接失败: %v", err)
+// CollectApiV1ClientNodes 采集 api/v1/client 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectApiV1ClientNodes() error {
+	keywords := []string{
+		"api/v1/client",
+		"/api/v1/client/",
+		"api/v1/client/subscribe",
 	}
+	return c.collectNodesGeneric(c.SearchApiV1ClientLinks, "api/v1/client", keywords)
+}
 
-	log.Printf("共找到 %d 个 m7r52rosihxm 链接，开始采集节点", len(m7r52rosihxmLinks))
-
-	// 采集节点
-	var allValidNodes []*ValidNode
-	var allParsedNodes []string            // 保存所有解析出的节点（用于去重）
-	seenNodeLinks := make(map[string]bool) // 全局去重
-	var wg sync.WaitGroup
-	resultsChan := make(chan *NodeResult, len(m7r52rosihxmLinks))
-	var mu sync.Mutex // 保护并发访问
-
-	// 并发采集
-	maxConcurrency := 10
-	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
-		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
-			maxConcurrency = n
-		}
+// CollectJiansendianqiNodes 采集建森电器链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectJiansendianqiNodes() error {
+	keywords := []string{
+		"建森电器.com",
+		"建森电器",
 	}
-	semaphore := make(chan struct{}, maxConcurrency) // 限制并发数
+	return c.collectNodesGeneric(c.SearchJiansendianqiLinks, "建森电器", keywords)
+}
 
-	for _, link := range m7r52rosihxmLinks {
-		wg.Add(1)
-		go func(l string) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			result := &NodeResult{Link: l}
-
-			// 获取订阅内容
-			content, err := c.FetchSubscription(l)
-			if err != nil {
-				result.Error = err
-				resultsChan <- result
-				return
-			}
-
-			// 解析节点（即使失败也继续，尝试从原始内容提取）
-			nodes, err := c.ParseNodes(content)
-			if err != nil {
-				// 如果 base64 解码失败，尝试直接从原始内容提取节点链接
-				log.Printf("m7r52rosihxm 链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
-				nodes = c.extractNodesFromRawContent(content)
-				if len(nodes) == 0 {
-					result.Error = err
-					resultsChan <- result
-					return
-				}
-				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
-			}
-
-			result.Nodes = nodes
-			log.Printf("m7r52rosihxm 链接 %s 解析出 %d 个节点", l, len(nodes))
-
-			// 测试节点
-			for _, nodeLink := range nodes {
-				// 全局去重
-				mu.Lock()
-				if seenNodeLinks[nodeLink] {
-					mu.Unlock()
-					continue
-				}
-				seenNodeLinks[nodeLink] = true
-				mu.Unlock()
-				allParsedNodes = append(allParsedNodes, nodeLink)
-
-				// 默认使用 sing-box 进行真实链接测速
-				var validNode *ValidNode
-				useSingBox := os.Getenv("USE_SINGBOX")
-				if useSingBox == "false" {
-					// 只有明确禁用时才使用 TCP 测试
-					validNode = c.TestNode(nodeLink)
-				} else {
-					// 默认使用 sing-box 进行真实链接测速
-					validNode = c.TestNodeWithSingBox(nodeLink)
-				}
-				if validNode.Error == nil {
-					result.ValidNodes = append(result.ValidNodes, validNode)
-					mu.Lock()
-					allValidNodes = append(allValidNodes, validNode)
-					mu.Unlock()
-				} else {
-					// 记录测试失败的节点类型（用于统计）
-					if validNode.Type != "" {
-						result.ValidNodes = append(result.ValidNodes, validNode)
-					}
-				}
-			}
-
-			resultsChan <- result
-		}(link)
+// CollectNinjasubNodes 采集 ninjasub 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectNinjasubNodes() error {
+	keywords := []string{
+		"ninjasub.com/link",
+		"ninjasub.com/link/",
 	}
+	return c.collectNodesGeneric(c.SearchNinjasubLinks, "ninjasub", keywords)
+}
 
-	go func() {
-		wg.Wait()
-		close(resultsChan)
-	}()
-
-	// 收集结果并统计
-	typeStats := make(map[string]int)       // 所有解析出的节点类型统计
-	validTypeStats := make(map[string]int)  // 测试通过的节点类型统计
-	failedTypeStats := make(map[string]int) // 测试失败的节点类型统计
-	totalNodes := 0
-	totalValidNodes := 0
-
-	for result := range resultsChan {
-		if result.Error != nil {
-			log.Printf("m7r52rosihxm 链接 %s 处理失败: %v", result.Link, result.Error)
-		} else {
-			totalNodes += len(result.Nodes)
-			totalValidNodes += len(result.ValidNodes)
-
-			// 统计所有解析出的节点类型
-			for _, nodeLink := range result.Nodes {
-				if node, err := ParseNodeLink(nodeLink); err == nil {
-					typeStats[node.Type]++
-				}
-			}
-
-			// 统计测试结果
-			for _, validNode := range result.ValidNodes {
-				if validNode.Type != "" {
-					if validNode.Error == nil {
-						validTypeStats[validNode.Type]++
-					} else {
-						failedTypeStats[validNode.Type]++
-					}
-				}
-			}
-
-			log.Printf("m7r52rosihxm 链接 %s: 共 %d 个节点，%d 个可用",
-				result.Link, len(result.Nodes), len(result.ValidNodes))
-		}
+// CollectXueshanNodes 采集 xueshan 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectXueshanNodes() error {
+	keywords := []string{
+		"xueshan.shop/s",
+		"xueshan.shop/s/",
 	}
+	return c.collectNodesGeneric(c.SearchXueshanLinks, "xueshan", keywords)
+}
 
-	log.Printf("m7r52rosihxm 节点采集完成，共解析 %d 个节点（去重后 %d 个），%d 个可用节点", totalNodes, len(allParsedNodes), len(allValidNodes))
-	if len(typeStats) > 0 {
-		log.Printf("解析出的节点类型统计:")
-		for nodeType, count := range typeStats {
-			validCount := validTypeStats[nodeType]
-			failedCount := failedTypeStats[nodeType]
-			log.Printf("  %s: 共 %d 个 (可用: %d, 失败: %d)", nodeType, count, validCount, failedCount)
-		}
+// CollectNginx24zfdNodes 采集 nginx24zfd 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectNginx24zfdNodes() error {
+	keywords := []string{
+		"nginx24zfd.xyz/link",
+		"nginx24zfd.xyz/link/",
 	}
+	return c.collectNodesGeneric(c.SearchNginx24zfdLinks, "nginx24zfd", keywords)
+}
 
-	// 保存结果到 nodes.txt（追加模式，保留现有节点）
-	// 读取现有的 nodes.txt 内容（如果存在）
-	existingContent := ""
-	if content, err := os.ReadFile("nodes.txt"); err == nil {
-		existingContent = string(content)
+// CollectIplcmeNodes 采集 iplcme 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectIplcmeNodes() error {
+	keywords := []string{
+		"iplcme.com",
 	}
+	return c.collectNodesGeneric(c.SearchIplcmeLinks, "iplcme", keywords)
+}
 
-	// 收集所有节点链接（去重）
-	var allNodes []string
-	seenNodes := make(map[string]bool)
-
-	// 先添加现有节点
-	if existingContent != "" {
-		lines := strings.Split(strings.TrimSpace(existingContent), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" && !seenNodes[line] {
-				seenNodes[line] = true
-				allNodes = append(allNodes, line)
-			}
-		}
+// CollectAdfgawidhioawjdNodes 采集 adfgawidhioawjd 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectAdfgawidhioawjdNodes() error {
+	keywords := []string{
+		"adfgawidhioawjd.site/api/v1/client",
+		"adfgawidhioawjd.site/api/v1/client/",
 	}
-
-	// 添加新的 m7r52rosihxm 节点（只添加测试成功的节点）
-	for _, node := range allValidNodes {
-		if node.Error == nil && !seenNodes[node.Link] {
-			seenNodes[node.Link] = true
-			allNodes = append(allNodes, node.Link)
-		}
-	}
-
-	// 写入文件
-	outputFile := "nodes.txt"
-	content := strings.Join(allNodes, "\n")
-	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
-		return fmt.Errorf("写入文件失败: %v", err)
-	}
-
-	log.Printf("m7r52rosihxm 节点已保存到 %s，共 %d 个节点（包含现有节点）", outputFile, len(allNodes))
-
-	// 推送到 Gist（如果配置了）
-	gistID := os.Getenv("GIST_ID")
-	gistToken := os.Getenv("GIST_TOKEN")
-	if gistToken == "" {
-		gistToken = c.githubToken
-	}
-
-	if gistID != "" || gistToken != "" {
-		log.Printf("准备推送到 Gist (ID: %s)...", gistID)
-		if err := c.PushToGist(outputFile, allValidNodes); err != nil {
-			log.Printf("❌ 推送到 Gist 失败: %v", err)
-		} else {
-			log.Printf("✅ Gist 推送成功，本地文件已保存到 %s", outputFile)
-		}
-	}
-
-	return nil
+	return c.collectNodesGeneric(c.SearchAdfgawidhioawjdLinks, "adfgawidhioawjd", keywords)
 }
 
 // SaveResults 保存结果
@@ -1940,20 +1686,60 @@ func main() {
 		log.Println("========== m7r52rosihxm 节点采集完成 ==========")
 	}
 
-	// 第四步：采集 glados 链接中的节点（追加到 sub.txt）
-	log.Println("========== 开始采集 glados 链接节点 ==========")
-	if err := collector.CollectGladosNodes(); err != nil {
-		log.Printf("glados 节点采集失败: %v", err)
+	// 第四步（优先）：采集 api/v1/client 链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集 api/v1/client 链接节点（优先） ==========")
+	if err := collector.CollectApiV1ClientNodes(); err != nil {
+		log.Printf("api/v1/client 节点采集失败: %v", err)
 	} else {
-		log.Println("========== glados 节点采集完成 ==========")
+		log.Println("========== api/v1/client 节点采集完成 ==========")
 	}
 
-	// 第五步：采集订阅链接中的节点（追加到 sub.txt）
-	log.Println("========== 开始采集订阅链接节点 ==========")
-	if err := collector.CollectSubNodes(); err != nil {
-		log.Printf("订阅节点采集失败: %v", err)
+	// 第五步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集建森电器链接节点（优先） ==========")
+	if err := collector.CollectJiansendianqiNodes(); err != nil {
+		log.Printf("建森电器节点采集失败: %v", err)
 	} else {
-		log.Println("========== 订阅节点采集完成 ==========")
+		log.Println("========== 建森电器节点采集完成 ==========")
+	}
+
+	// 第六步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集 ninjasub 链接节点（优先） ==========")
+	if err := collector.CollectNinjasubNodes(); err != nil {
+		log.Printf("ninjasub 节点采集失败: %v", err)
+	} else {
+		log.Println("========== ninjasub 节点采集完成 ==========")
+	}
+
+	// 第七步（优先）：采集 xueshan 链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集 xueshan 链接节点（优先） ==========")
+	if err := collector.CollectXueshanNodes(); err != nil {
+		log.Printf("xueshan 节点采集失败: %v", err)
+	} else {
+		log.Println("========== xueshan 节点采集完成 ==========")
+	}
+
+	// 第八步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集 nginx24zfd 链接节点（优先） ==========")
+	if err := collector.CollectNginx24zfdNodes(); err != nil {
+		log.Printf("nginx24zfd 节点采集失败: %v", err)
+	} else {
+		log.Println("========== nginx24zfd 节点采集完成 ==========")
+	}
+
+	// 第九步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集 iplcme 链接节点（优先） ==========")
+	if err := collector.CollectIplcmeNodes(); err != nil {
+		log.Printf("iplcme 节点采集失败: %v", err)
+	} else {
+		log.Println("========== iplcme 节点采集完成 ==========")
+	}
+
+	// 第十步（优先）：采集 adfgawidhioawjd 链接中的节点（追加到 nodes.txt）
+	log.Println("========== 开始采集 adfgawidhioawjd 链接节点（优先） ==========")
+	if err := collector.CollectAdfgawidhioawjdNodes(); err != nil {
+		log.Printf("adfgawidhioawjd 节点采集失败: %v", err)
+	} else {
+		log.Println("========== adfgawidhioawjd 节点采集完成 ==========")
 	}
 
 	log.Println("========== 所有采集任务完成 ==========")
