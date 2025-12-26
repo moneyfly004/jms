@@ -22,10 +22,10 @@ type ProxyNode struct {
 	TLS      bool
 	UDP      bool
 	// SSR 相关
-	Protocol     string // SSR 协议
+	Protocol      string // SSR 协议
 	ProtocolParam string // SSR 协议参数
-	Obfs         string // SSR 混淆
-	ObfsParam    string // SSR 混淆参数
+	Obfs          string // SSR 混淆
+	ObfsParam     string // SSR 混淆参数
 	// Hysteria 相关
 	Auth         string // Hysteria 认证
 	ObfsPassword string // Hysteria 混淆密码
@@ -50,6 +50,15 @@ type ProxyNode struct {
 	// WebSocket 相关
 	WSHost string // WebSocket host
 	WSPath string // WebSocket path
+	// SS 插件相关
+	Plugin     string // SS 插件名称 (v2ray-plugin, obfs-local, simple-obfs 等)
+	PluginOpts string // SS 插件选项
+	// AnyTLS 相关
+	AnyTLSVersion string // AnyTLS 版本
+	AnyTLSPadding string // AnyTLS 填充方案
+	// GOST 相关
+	GOSTProtocol string // GOST 协议类型
+	GOSTPath     string // GOST 路径
 }
 
 // ParseNodeLink 解析节点链接
@@ -72,6 +81,14 @@ func ParseNodeLink(link string) (*ProxyNode, error) {
 		return parseWireGuard(link)
 	} else if strings.HasPrefix(link, "tuic://") {
 		return parseTUIC(link)
+	} else if strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+		return parseHTTP(link)
+	} else if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks4://") || strings.HasPrefix(link, "socks5://") {
+		return parseSOCKS(link)
+	} else if strings.HasPrefix(link, "anytls://") {
+		return parseAnyTLS(link)
+	} else if strings.HasPrefix(link, "gost://") || strings.HasPrefix(link, "gost+") {
+		return parseGOST(link)
 	}
 
 	return nil, fmt.Errorf("不支持的协议")
@@ -327,7 +344,7 @@ func parseShadowsocks(link string) (*ProxyNode, error) {
 	if strings.HasPrefix(link, "ss://") {
 		// 移除 ss:// 前缀
 		rest := strings.TrimPrefix(link, "ss://")
-		
+
 		// 查找 # 分隔符（如果有备注）
 		var base64Part string
 		if idx := strings.Index(rest, "#"); idx != -1 {
@@ -335,7 +352,7 @@ func parseShadowsocks(link string) (*ProxyNode, error) {
 		} else {
 			base64Part = rest
 		}
-		
+
 		// 尝试解码 base64
 		decoded, err := safeBase64Decode(base64Part)
 		if err == nil {
@@ -344,40 +361,71 @@ func parseShadowsocks(link string) (*ProxyNode, error) {
 				// 分割为认证部分和地址部分
 				parts := strings.SplitN(decoded, "@", 2)
 				if len(parts) == 2 {
-					authPart := parts[0]  // method:password
-					addrPart := parts[1]  // server:port
-					
+					authPart := parts[0] // method:password
+					addrPart := parts[1] // server:port
+
 					// 解析认证信息
 					if strings.Contains(authPart, ":") {
 						authParts := strings.SplitN(authPart, ":", 2)
 						method := authParts[0]
 						password := authParts[1]
-						
+
 						// 解析地址
 						if strings.Contains(addrPart, ":") {
 							addrParts := strings.SplitN(addrPart, ":", 2)
 							server := addrParts[0]
 							portStr := addrParts[1]
-							
+
 							port, err := strconv.Atoi(portStr)
 							if err != nil {
 								return nil, fmt.Errorf("无效的端口: %s", portStr)
 							}
-							
+
 							// 获取备注（如果有）
 							name := getFragmentFromLink(link)
 							if name == "" {
 								name = fmt.Sprintf("SS-%s:%d", server, port)
 							}
-							
-							return &ProxyNode{
+
+							node := &ProxyNode{
 								Name:     name,
 								Type:     "ss",
 								Server:   server,
 								Port:     port,
 								Cipher:   method,
 								Password: password,
-							}, nil
+							}
+
+							// 尝试从原始链接解析插件信息（如果有查询参数）
+							if parsed, err := url.Parse(link); err == nil {
+								query := parsed.Query()
+								if plugin := query.Get("plugin"); plugin != "" {
+									node.Plugin = plugin
+									var pluginOpts []string
+									if path := query.Get("path"); path != "" {
+										pluginOpts = append(pluginOpts, "path="+path)
+									}
+									if host := query.Get("host"); host != "" {
+										pluginOpts = append(pluginOpts, "host="+host)
+									}
+									if tls := query.Get("tls"); tls != "" {
+										pluginOpts = append(pluginOpts, "tls")
+									}
+									if obfs := query.Get("obfs"); obfs != "" {
+										pluginOpts = append(pluginOpts, "obfs="+obfs)
+									}
+									if obfsHost := query.Get("obfs-host"); obfsHost != "" {
+										pluginOpts = append(pluginOpts, "obfs-host="+obfsHost)
+									}
+									if len(pluginOpts) > 0 {
+										node.PluginOpts = strings.Join(pluginOpts, ";")
+									} else if strings.Contains(plugin, ";") {
+										node.PluginOpts = plugin
+									}
+								}
+							}
+
+							return node, nil
 						}
 					}
 				}
@@ -397,7 +445,7 @@ func parseShadowsocks(link string) (*ProxyNode, error) {
 		authInfo := parsed.User.String()
 		// URL 解码
 		authInfo, _ = url.QueryUnescape(authInfo)
-		
+
 		if strings.Contains(authInfo, ":") {
 			parts := strings.SplitN(authInfo, ":", 2)
 			method = parts[0]
@@ -445,6 +493,45 @@ func parseShadowsocks(link string) (*ProxyNode, error) {
 		Port:     getPort(parsed),
 		Cipher:   method,
 		Password: password,
+	}
+
+	// 解析 SS 插件参数
+	query := parsed.Query()
+	if plugin := query.Get("plugin"); plugin != "" {
+		// 插件格式可能是: plugin=v2ray-plugin;path=/path;host=example.com;tls
+		// 或者: plugin=obfs-local;obfs=http;obfs-host=example.com
+		node.Plugin = plugin
+
+		// 解析插件选项
+		var pluginOpts []string
+		if path := query.Get("path"); path != "" {
+			pluginOpts = append(pluginOpts, "path="+path)
+		}
+		if host := query.Get("host"); host != "" {
+			pluginOpts = append(pluginOpts, "host="+host)
+		}
+		if tls := query.Get("tls"); tls != "" {
+			pluginOpts = append(pluginOpts, "tls")
+		}
+		if obfs := query.Get("obfs"); obfs != "" {
+			pluginOpts = append(pluginOpts, "obfs="+obfs)
+		}
+		if obfsHost := query.Get("obfs-host"); obfsHost != "" {
+			pluginOpts = append(pluginOpts, "obfs-host="+obfsHost)
+		}
+		if mux := query.Get("mux"); mux != "" {
+			pluginOpts = append(pluginOpts, "mux="+mux)
+		}
+		if mode := query.Get("mode"); mode != "" {
+			pluginOpts = append(pluginOpts, "mode="+mode)
+		}
+
+		// 如果插件参数中包含分号，说明是完整格式
+		if strings.Contains(plugin, ";") {
+			node.PluginOpts = plugin
+		} else if len(pluginOpts) > 0 {
+			node.PluginOpts = strings.Join(pluginOpts, ";")
+		}
 	}
 
 	return node, nil
@@ -512,13 +599,13 @@ func getFragment(parsed *url.URL, defaultValue string) string {
 func parseSSR(link string) (*ProxyNode, error) {
 	// SSR 格式: ssr://base64(server:port:protocol:method:obfs:base64(password)/?obfsparam=base64(obfsparam)&protoparam=base64(protoparam)&remarks=base64(remarks))
 	encoded := strings.TrimPrefix(link, "ssr://")
-	
+
 	// URL 解码
 	decoded, err := url.QueryUnescape(encoded)
 	if err == nil {
 		encoded = decoded
 	}
-	
+
 	// Base64 解码
 	decodedBytes, err := base64.URLEncoding.DecodeString(encoded)
 	if err != nil {
@@ -527,38 +614,38 @@ func parseSSR(link string) (*ProxyNode, error) {
 			return nil, fmt.Errorf("SSR Base64 解码失败: %v", err)
 		}
 	}
-	
+
 	decodedStr := string(decodedBytes)
-	
+
 	// 解析 SSR 格式
 	parts := strings.Split(decodedStr, "/")
 	if len(parts) < 1 {
 		return nil, fmt.Errorf("无效的 SSR 格式")
 	}
-	
+
 	mainPart := parts[0]
 	params := ""
 	if len(parts) > 1 {
 		params = strings.Join(parts[1:], "/")
 	}
-	
+
 	// 解析主部分: server:port:protocol:method:obfs:password
 	mainParts := strings.Split(mainPart, ":")
 	if len(mainParts) < 6 {
 		return nil, fmt.Errorf("SSR 格式不完整")
 	}
-	
+
 	server := mainParts[0]
 	port, err := strconv.Atoi(mainParts[1])
 	if err != nil {
 		return nil, fmt.Errorf("无效的端口: %s", mainParts[1])
 	}
-	
+
 	protocol := mainParts[2]
 	method := mainParts[3]
 	obfs := mainParts[4]
 	passwordBase64 := strings.Join(mainParts[5:], ":")
-	
+
 	// 解码密码
 	passwordBytes, err := base64.URLEncoding.DecodeString(passwordBase64)
 	if err != nil {
@@ -568,27 +655,27 @@ func parseSSR(link string) (*ProxyNode, error) {
 		}
 	}
 	password := string(passwordBytes)
-	
+
 	// 解析参数
 	var obfsParam, protocolParam, remarks string
 	if params != "" {
 		parsedParams, _ := url.Parse("?" + params)
 		query := parsedParams.Query()
-		
+
 		if obfsParamBase64 := query.Get("obfsparam"); obfsParamBase64 != "" {
 			decoded, _ := base64.URLEncoding.DecodeString(obfsParamBase64)
 			if len(decoded) > 0 {
 				obfsParam = string(decoded)
 			}
 		}
-		
+
 		if protocolParamBase64 := query.Get("protoparam"); protocolParamBase64 != "" {
 			decoded, _ := base64.URLEncoding.DecodeString(protocolParamBase64)
 			if len(decoded) > 0 {
 				protocolParam = string(decoded)
 			}
 		}
-		
+
 		if remarksBase64 := query.Get("remarks"); remarksBase64 != "" {
 			decoded, _ := base64.URLEncoding.DecodeString(remarksBase64)
 			if len(decoded) > 0 {
@@ -596,11 +683,11 @@ func parseSSR(link string) (*ProxyNode, error) {
 			}
 		}
 	}
-	
+
 	if remarks == "" {
 		remarks = fmt.Sprintf("SSR-%s:%d", server, port)
 	}
-	
+
 	return &ProxyNode{
 		Name:          remarks,
 		Type:          "ssr",
@@ -608,7 +695,7 @@ func parseSSR(link string) (*ProxyNode, error) {
 		Port:          port,
 		Password:      password,
 		Cipher:        method,
-		Protocol:     protocol,
+		Protocol:      protocol,
 		ProtocolParam: protocolParam,
 		Obfs:          obfs,
 		ObfsParam:     obfsParam,
@@ -621,15 +708,15 @@ func parseHysteria(link string) (*ProxyNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	query := parsed.Query()
-	
+
 	port := getPort(parsed)
 	auth := query.Get("auth")
 	obfsPassword := query.Get("obfs")
-	
+
 	name := getFragment(parsed, fmt.Sprintf("Hysteria-%s:%d", parsed.Hostname(), port))
-	
+
 	return &ProxyNode{
 		Name:         name,
 		Type:         "hysteria",
@@ -647,19 +734,19 @@ func parseWireGuard(link string) (*ProxyNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	privateKey := parsed.User.Username()
 	if privateKey == "" {
 		return nil, fmt.Errorf("缺少私钥")
 	}
-	
+
 	query := parsed.Query()
 	publicKey := query.Get("publickey")
 	reserved := query.Get("reserved")
-	
+
 	port := getPort(parsed)
 	name := getFragment(parsed, fmt.Sprintf("WireGuard-%s:%d", parsed.Hostname(), port))
-	
+
 	return &ProxyNode{
 		Name:       name,
 		Type:       "wireguard",
@@ -678,22 +765,22 @@ func parseTUIC(link string) (*ProxyNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	uuid := parsed.User.Username()
 	if uuid == "" {
 		return nil, fmt.Errorf("缺少 UUID")
 	}
-	
+
 	query := parsed.Query()
 	token := query.Get("token")
 	password := query.Get("password")
 	if password == "" {
 		password = uuid
 	}
-	
+
 	port := getPort(parsed)
 	name := getFragment(parsed, fmt.Sprintf("TUIC-%s:%d", parsed.Hostname(), port))
-	
+
 	return &ProxyNode{
 		Name:     name,
 		Type:     "tuic",
@@ -706,15 +793,194 @@ func parseTUIC(link string) (*ProxyNode, error) {
 	}, nil
 }
 
+// parseHTTP 解析 HTTP 代理节点
+func parseHTTP(link string) (*ProxyNode, error) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+
+	port := getPort(parsed)
+	name := getFragment(parsed, fmt.Sprintf("HTTP-%s:%d", parsed.Hostname(), port))
+
+	node := &ProxyNode{
+		Name:   name,
+		Type:   "http",
+		Server: parsed.Hostname(),
+		Port:   port,
+	}
+
+	// 解析认证信息
+	if parsed.User != nil {
+		node.Password = parsed.User.Username()
+		if pwd, ok := parsed.User.Password(); ok {
+			node.Password = pwd
+		}
+	}
+
+	return node, nil
+}
+
+// parseSOCKS 解析 SOCKS 代理节点
+func parseSOCKS(link string) (*ProxyNode, error) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+
+	port := getPort(parsed)
+	scheme := parsed.Scheme
+	socksType := "socks5"
+	if scheme == "socks4" {
+		socksType = "socks4"
+	} else if scheme == "socks" {
+		socksType = "socks5" // 默认 SOCKS5
+	}
+
+	name := getFragment(parsed, fmt.Sprintf("SOCKS-%s:%d", parsed.Hostname(), port))
+
+	node := &ProxyNode{
+		Name:   name,
+		Type:   socksType,
+		Server: parsed.Hostname(),
+		Port:   port,
+	}
+
+	// 解析认证信息
+	if parsed.User != nil {
+		node.Password = parsed.User.Username()
+		if pwd, ok := parsed.User.Password(); ok {
+			node.Password = pwd
+		}
+	}
+
+	return node, nil
+}
+
+// parseAnyTLS 解析 AnyTLS 节点
+func parseAnyTLS(link string) (*ProxyNode, error) {
+	// AnyTLS 格式类似 vless/vmess，但使用 anytls 作为传输方式
+	// 示例: anytls://uuid@server:port?version=1&padding=random#name
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+
+	uuid := parsed.User.Username()
+	if uuid == "" {
+		return nil, fmt.Errorf("缺少 UUID")
+	}
+
+	query := parsed.Query()
+	port := getPort(parsed)
+	name := getFragment(parsed, fmt.Sprintf("AnyTLS-%s:%d", parsed.Hostname(), port))
+
+	node := &ProxyNode{
+		Name:   name,
+		Type:   "anytls",
+		Server: parsed.Hostname(),
+		Port:   port,
+		UUID:   uuid,
+		TLS:    true,
+		UDP:    true,
+	}
+
+	// 解析 AnyTLS 特定参数
+	if version := query.Get("version"); version != "" {
+		node.AnyTLSVersion = version
+	}
+	if padding := query.Get("padding"); padding != "" {
+		node.AnyTLSPadding = padding
+	}
+
+	// 解析通用参数
+	if sni := query.Get("sni"); sni != "" {
+		node.SNI = sni
+	}
+	if alpn := query.Get("alpn"); alpn != "" {
+		node.ALPN = alpn
+	}
+	if security := query.Get("security"); security != "" {
+		node.Security = security
+	}
+
+	return node, nil
+}
+
+// parseGOST 解析 GOST 节点
+func parseGOST(link string) (*ProxyNode, error) {
+	// GOST 格式: gost://protocol+transport://user:pass@host:port?param=value
+	// 或者: gost+protocol+transport://user:pass@host:port
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+
+	port := getPort(parsed)
+	scheme := parsed.Scheme
+
+	// 解析协议类型
+	protocol := "auto"
+	if strings.HasPrefix(scheme, "gost+") {
+		// gost+http+tls:// 格式
+		parts := strings.Split(strings.TrimPrefix(scheme, "gost+"), "+")
+		if len(parts) > 0 {
+			protocol = parts[0]
+		}
+	} else if scheme == "gost" {
+		// gost:// 格式，从查询参数获取协议
+		query := parsed.Query()
+		if p := query.Get("protocol"); p != "" {
+			protocol = p
+		}
+	}
+
+	name := getFragment(parsed, fmt.Sprintf("GOST-%s:%d", parsed.Hostname(), port))
+
+	node := &ProxyNode{
+		Name:         name,
+		Type:         "gost",
+		Server:       parsed.Hostname(),
+		Port:         port,
+		GOSTProtocol: protocol,
+	}
+
+	// 解析认证信息
+	if parsed.User != nil {
+		node.Password = parsed.User.Username()
+		if pwd, ok := parsed.User.Password(); ok {
+			node.Password = pwd
+		}
+	}
+
+	// 解析查询参数
+	query := parsed.Query()
+	if path := query.Get("path"); path != "" {
+		node.GOSTPath = path
+	}
+	if sni := query.Get("sni"); sni != "" {
+		node.SNI = sni
+	}
+	if tls := query.Get("tls"); tls == "true" || tls == "1" {
+		node.TLS = true
+	}
+
+	return node, nil
+}
+
 func getPort(parsed *url.URL) int {
 	portStr := parsed.Port()
 	if portStr == "" {
 		// 根据协议推断默认端口
 		switch parsed.Scheme {
-		case "vmess", "vless", "trojan":
+		case "vmess", "vless", "trojan", "https":
 			return 443
 		case "ss", "ssr":
 			return 8388
+		case "http":
+			return 80
+		case "socks", "socks4", "socks5":
+			return 1080
 		default:
 			return 443
 		}
@@ -722,4 +988,3 @@ func getPort(parsed *url.URL) int {
 	port, _ := strconv.Atoi(portStr)
 	return port
 }
-

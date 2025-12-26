@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -819,37 +822,498 @@ func (c *Collector) extractLinks(content string) []string {
 
 // extractNodesFromRawContent 从原始内容中提取节点链接（不进行 base64 解码）
 func (c *Collector) extractNodesFromRawContent(content string) []string {
-	var nodes []string
-	seenNodes := make(map[string]bool)
+	// 1. 先尝试解析 Clash YAML
+	if nodes := c.parseClashYAML(content); len(nodes) > 0 {
+		return nodes
+	}
 
-	// 支持多种分隔符
-	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	// 2. 尝试解析 sing-box JSON
+	if nodes := c.parseSingBoxJSON(content); len(nodes) > 0 {
+		return nodes
+	}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	// 3. 从文本中提取节点链接（支持所有协议）
+	return c.extractNodeLinks(content)
+}
+
+// convertClashProxyToLink 将 Clash 代理配置转换为节点链接
+func convertClashProxyToLink(proxy map[string]interface{}) string {
+	proxyType, _ := proxy["type"].(string)
+	if proxyType == "" {
+		return ""
+	}
+
+	server, _ := proxy["server"].(string)
+	if server == "" {
+		return ""
+	}
+
+	var port interface{}
+	if p, ok := proxy["port"]; ok {
+		port = p
+	} else {
+		port = 443
+	}
+
+	portStr := ""
+	switch v := port.(type) {
+	case int:
+		portStr = strconv.Itoa(v)
+	case float64:
+		portStr = strconv.Itoa(int(v))
+	case string:
+		portStr = v
+	}
+
+	name, _ := proxy["name"].(string)
+
+	switch proxyType {
+	case "ss":
+		return convertClashSS(proxy, server, portStr, name)
+	case "vmess":
+		return convertClashVMess(proxy, server, portStr, name)
+	case "vless":
+		return convertClashVLESS(proxy, server, portStr, name)
+	case "trojan":
+		return convertClashTrojan(proxy, server, portStr, name)
+	case "ssr":
+		return convertClashSSR(proxy, server, portStr, name)
+	case "hysteria", "hysteria2":
+		return convertClashHysteria(proxy, server, portStr, name)
+	case "wireguard":
+		return convertClashWireGuard(proxy, server, portStr, name)
+	case "tuic":
+		return convertClashTUIC(proxy, server, portStr, name)
+	case "http":
+		return convertClashHTTP(proxy, server, portStr, name)
+	case "socks5":
+		return convertClashSOCKS(proxy, server, portStr, name)
+	}
+
+	return ""
+}
+
+// convertSingBoxOutboundToLink 将 sing-box outbound 配置转换为节点链接
+func convertSingBoxOutboundToLink(outbound map[string]interface{}) string {
+	outboundType, _ := outbound["type"].(string)
+	if outboundType == "" {
+		return ""
+	}
+
+	server, _ := outbound["server"].(string)
+	if server == "" {
+		return ""
+	}
+
+	var port interface{}
+	if p, ok := outbound["server_port"]; ok {
+		port = p
+	} else {
+		port = 443
+	}
+
+	portStr := ""
+	switch v := port.(type) {
+	case int:
+		portStr = strconv.Itoa(v)
+	case float64:
+		portStr = strconv.Itoa(int(v))
+	case string:
+		portStr = v
+	}
+
+	tag, _ := outbound["tag"].(string)
+
+	switch outboundType {
+	case "shadowsocks":
+		return convertSingBoxSS(outbound, server, portStr, tag)
+	case "vmess":
+		return convertSingBoxVMess(outbound, server, portStr, tag)
+	case "vless":
+		return convertSingBoxVLESS(outbound, server, portStr, tag)
+	case "trojan":
+		return convertSingBoxTrojan(outbound, server, portStr, tag)
+	case "hysteria", "hysteria2":
+		return convertSingBoxHysteria(outbound, server, portStr, tag)
+	case "wireguard":
+		return convertSingBoxWireGuard(outbound, server, portStr, tag)
+	case "tuic":
+		return convertSingBoxTUIC(outbound, server, portStr, tag)
+	case "http":
+		return convertSingBoxHTTP(outbound, server, portStr, tag)
+	case "socks":
+		return convertSingBoxSOCKS(outbound, server, portStr, tag)
+	}
+
+	return ""
+}
+
+// Clash 格式转换函数
+func convertClashSS(proxy map[string]interface{}, server, port, name string) string {
+	cipher, _ := proxy["cipher"].(string)
+	password, _ := proxy["password"].(string)
+	if cipher == "" || password == "" {
+		return ""
+	}
+	// ss://base64(method:password@server:port)#name
+	auth := fmt.Sprintf("%s:%s", cipher, password)
+	authBase64 := base64.StdEncoding.EncodeToString([]byte(auth))
+	return fmt.Sprintf("ss://%s@%s:%s#%s", authBase64, server, port, url.QueryEscape(name))
+}
+
+func convertClashVMess(proxy map[string]interface{}, server, port, name string) string {
+	uuid, _ := proxy["uuid"].(string)
+	if uuid == "" {
+		return ""
+	}
+	// 构建 VMess JSON
+	vmessData := map[string]interface{}{
+		"v":    "2",
+		"ps":   name,
+		"add":  server,
+		"port": port,
+		"id":   uuid,
+		"aid":  0,
+		"net":  "tcp",
+		"type": "none",
+		"tls":  "",
+	}
+	if tls, ok := proxy["tls"].(bool); ok && tls {
+		vmessData["tls"] = "tls"
+		if sni, ok := proxy["sni"].(string); ok && sni != "" {
+			vmessData["sni"] = sni
 		}
+	}
+	if network, ok := proxy["network"].(string); ok && network != "" {
+		vmessData["net"] = network
+	}
+	jsonData, _ := json.Marshal(vmessData)
+	return "vmess://" + base64.StdEncoding.EncodeToString(jsonData)
+}
 
-		// 直接检查是否是节点链接（支持所有协议）
-		if strings.HasPrefix(line, "ss://") ||
-			strings.HasPrefix(line, "vmess://") ||
-			strings.HasPrefix(line, "vless://") ||
-			strings.HasPrefix(line, "trojan://") ||
-			strings.HasPrefix(line, "ssr://") ||
-			strings.HasPrefix(line, "hysteria://") ||
-			strings.HasPrefix(line, "hy2://") ||
-			strings.HasPrefix(line, "wireguard://") ||
-			strings.HasPrefix(line, "wg://") ||
-			strings.HasPrefix(line, "tuic://") {
-			if !seenNodes[line] {
-				seenNodes[line] = true
-				nodes = append(nodes, line)
+func convertClashVLESS(proxy map[string]interface{}, server, port, name string) string {
+	uuid, _ := proxy["uuid"].(string)
+	if uuid == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "vless",
+		User:     url.User(uuid),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	q := url.Values{}
+	if tls, ok := proxy["tls"].(bool); ok && tls {
+		q.Set("security", "tls")
+		if sni, ok := proxy["sni"].(string); ok && sni != "" {
+			q.Set("sni", sni)
+		}
+	}
+	if network, ok := proxy["network"].(string); ok && network != "" {
+		q.Set("type", network)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertClashTrojan(proxy map[string]interface{}, server, port, name string) string {
+	password, _ := proxy["password"].(string)
+	if password == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "trojan",
+		User:     url.User(password),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	q := url.Values{}
+	if sni, ok := proxy["sni"].(string); ok && sni != "" {
+		q.Set("sni", sni)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertClashSSR(proxy map[string]interface{}, server, port, name string) string {
+	// SSR 格式较复杂，这里简化处理
+	cipher, _ := proxy["cipher"].(string)
+	password, _ := proxy["password"].(string)
+	protocol, _ := proxy["protocol"].(string)
+	obfs, _ := proxy["obfs"].(string)
+	if cipher == "" || password == "" {
+		return ""
+	}
+	// ssr://base64(server:port:protocol:cipher:obfs:base64(password))
+	passwordBase64 := base64.StdEncoding.EncodeToString([]byte(password))
+	ssrStr := fmt.Sprintf("%s:%s:%s:%s:%s:%s", server, port, protocol, cipher, obfs, passwordBase64)
+	return "ssr://" + base64.URLEncoding.EncodeToString([]byte(ssrStr))
+}
+
+func convertClashHysteria(proxy map[string]interface{}, server, port, name string) string {
+	u := url.URL{
+		Scheme:   "hysteria",
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	q := url.Values{}
+	if auth, ok := proxy["auth"].(string); ok && auth != "" {
+		q.Set("auth", auth)
+	}
+	if obfs, ok := proxy["obfs"].(string); ok && obfs != "" {
+		q.Set("obfs", obfs)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertClashWireGuard(proxy map[string]interface{}, server, port, name string) string {
+	privateKey, _ := proxy["private-key"].(string)
+	if privateKey == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "wireguard",
+		User:     url.User(privateKey),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	q := url.Values{}
+	if publicKey, ok := proxy["public-key"].(string); ok && publicKey != "" {
+		q.Set("publickey", publicKey)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertClashTUIC(proxy map[string]interface{}, server, port, name string) string {
+	uuid, _ := proxy["uuid"].(string)
+	if uuid == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "tuic",
+		User:     url.User(uuid),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	q := url.Values{}
+	if token, ok := proxy["token"].(string); ok && token != "" {
+		q.Set("token", token)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertClashHTTP(proxy map[string]interface{}, server, port, name string) string {
+	u := url.URL{
+		Scheme:   "http",
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	if username, ok := proxy["username"].(string); ok && username != "" {
+		if password, ok := proxy["password"].(string); ok && password != "" {
+			u.User = url.UserPassword(username, password)
+		} else {
+			u.User = url.User(username)
+		}
+	}
+	return u.String()
+}
+
+func convertClashSOCKS(proxy map[string]interface{}, server, port, name string) string {
+	u := url.URL{
+		Scheme:   "socks5",
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: name,
+	}
+	if username, ok := proxy["username"].(string); ok && username != "" {
+		if password, ok := proxy["password"].(string); ok && password != "" {
+			u.User = url.UserPassword(username, password)
+		} else {
+			u.User = url.User(username)
+		}
+	}
+	return u.String()
+}
+
+// sing-box 格式转换函数
+func convertSingBoxSS(outbound map[string]interface{}, server, port, tag string) string {
+	method, _ := outbound["method"].(string)
+	password, _ := outbound["password"].(string)
+	if method == "" || password == "" {
+		return ""
+	}
+	auth := fmt.Sprintf("%s:%s", method, password)
+	authBase64 := base64.StdEncoding.EncodeToString([]byte(auth))
+	return fmt.Sprintf("ss://%s@%s:%s#%s", authBase64, server, port, url.QueryEscape(tag))
+}
+
+func convertSingBoxVMess(outbound map[string]interface{}, server, port, tag string) string {
+	uuid, _ := outbound["uuid"].(string)
+	if uuid == "" {
+		return ""
+	}
+	vmessData := map[string]interface{}{
+		"v":    "2",
+		"ps":   tag,
+		"add":  server,
+		"port": port,
+		"id":   uuid,
+		"aid":  0,
+		"net":  "tcp",
+		"type": "none",
+		"tls":  "",
+	}
+	if tls, ok := outbound["tls"].(map[string]interface{}); ok && tls != nil {
+		vmessData["tls"] = "tls"
+		if sni, ok := tls["server_name"].(string); ok && sni != "" {
+			vmessData["sni"] = sni
+		}
+	}
+	if transport, ok := outbound["transport"].(map[string]interface{}); ok {
+		if t, ok := transport["type"].(string); ok && t != "" {
+			vmessData["net"] = t
+		}
+	}
+	jsonData, _ := json.Marshal(vmessData)
+	return "vmess://" + base64.StdEncoding.EncodeToString(jsonData)
+}
+
+func convertSingBoxVLESS(outbound map[string]interface{}, server, port, tag string) string {
+	uuid, _ := outbound["uuid"].(string)
+	if uuid == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "vless",
+		User:     url.User(uuid),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	q := url.Values{}
+	if tls, ok := outbound["tls"].(map[string]interface{}); ok && tls != nil {
+		q.Set("security", "tls")
+		if sni, ok := tls["server_name"].(string); ok && sni != "" {
+			q.Set("sni", sni)
+		}
+	}
+	if transport, ok := outbound["transport"].(map[string]interface{}); ok {
+		if t, ok := transport["type"].(string); ok && t != "" {
+			q.Set("type", t)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertSingBoxTrojan(outbound map[string]interface{}, server, port, tag string) string {
+	password, _ := outbound["password"].(string)
+	if password == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "trojan",
+		User:     url.User(password),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	q := url.Values{}
+	if tls, ok := outbound["tls"].(map[string]interface{}); ok && tls != nil {
+		if sni, ok := tls["server_name"].(string); ok && sni != "" {
+			q.Set("sni", sni)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertSingBoxHysteria(outbound map[string]interface{}, server, port, tag string) string {
+	u := url.URL{
+		Scheme:   "hysteria",
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	q := url.Values{}
+	if auth, ok := outbound["auth_str"].(string); ok && auth != "" {
+		q.Set("auth", auth)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertSingBoxWireGuard(outbound map[string]interface{}, server, port, tag string) string {
+	privateKey, _ := outbound["private_key"].(string)
+	if privateKey == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "wireguard",
+		User:     url.User(privateKey),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	q := url.Values{}
+	if peers, ok := outbound["peers"].([]interface{}); ok && len(peers) > 0 {
+		if peer, ok := peers[0].(map[string]interface{}); ok {
+			if publicKey, ok := peer["public_key"].(string); ok && publicKey != "" {
+				q.Set("publickey", publicKey)
 			}
 		}
 	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
 
-	return nodes
+func convertSingBoxTUIC(outbound map[string]interface{}, server, port, tag string) string {
+	uuid, _ := outbound["uuid"].(string)
+	if uuid == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme:   "tuic",
+		User:     url.User(uuid),
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	q := url.Values{}
+	if token, ok := outbound["token"].(string); ok && token != "" {
+		q.Set("token", token)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func convertSingBoxHTTP(outbound map[string]interface{}, server, port, tag string) string {
+	u := url.URL{
+		Scheme:   "http",
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	if username, ok := outbound["username"].(string); ok && username != "" {
+		if password, ok := outbound["password"].(string); ok && password != "" {
+			u.User = url.UserPassword(username, password)
+		} else {
+			u.User = url.User(username)
+		}
+	}
+	return u.String()
+}
+
+func convertSingBoxSOCKS(outbound map[string]interface{}, server, port, tag string) string {
+	u := url.URL{
+		Scheme:   "socks5",
+		Host:     fmt.Sprintf("%s:%s", server, port),
+		Fragment: tag,
+	}
+	if username, ok := outbound["username"].(string); ok && username != "" {
+		if password, ok := outbound["password"].(string); ok && password != "" {
+			u.User = url.UserPassword(username, password)
+		} else {
+			u.User = url.User(username)
+		}
+	}
+	return u.String()
 }
 
 // makeRequest 发送 HTTP 请求
@@ -919,30 +1383,35 @@ func (c *Collector) FetchSubscription(link string) (string, error) {
 	return string(body), nil
 }
 
-// ParseNodes 解析节点
+// ParseNodes 解析节点（支持多种格式：base64、Clash YAML、sing-box JSON、纯文本）
 func (c *Collector) ParseNodes(content string) ([]string, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil, fmt.Errorf("内容为空")
 	}
 
+	// 1. 尝试解析 Clash YAML 格式
+	if nodes := c.parseClashYAML(content); len(nodes) > 0 {
+		return nodes, nil
+	}
+
+	// 2. 尝试解析 sing-box JSON 格式
+	if nodes := c.parseSingBoxJSON(content); len(nodes) > 0 {
+		return nodes, nil
+	}
+
+	// 3. 尝试 base64 解码
 	var decoded string
 	var err error
 
-	// 尝试多种解码方式
-	// 1. 先尝试 base64 解码
 	decodedBytes, err := base64.StdEncoding.DecodeString(content)
 	if err != nil {
-		// 2. 如果 base64 失败，尝试 URL-safe base64
 		decodedBytes, err = base64.URLEncoding.DecodeString(content)
 		if err != nil {
-			// 3. 如果还是失败，尝试使用 safeBase64Decode（处理 padding 问题）
 			decoded, err = safeBase64Decode(content)
 			if err != nil {
 				// 4. 如果都失败，可能是纯文本格式，直接使用原始内容
 				decoded = content
-			} else {
-				// safeBase64Decode 已经返回 string
 			}
 		} else {
 			decoded = string(decodedBytes)
@@ -951,10 +1420,69 @@ func (c *Collector) ParseNodes(content string) ([]string, error) {
 		decoded = string(decodedBytes)
 	}
 
-	// 按行分割（支持 \n 和 \r\n）
-	lines := strings.Split(strings.ReplaceAll(decoded, "\r\n", "\n"), "\n")
+	// 5. 从解码后的内容提取节点链接
+	return c.extractNodeLinks(decoded), nil
+}
+
+// parseClashYAML 解析 Clash YAML 格式
+func (c *Collector) parseClashYAML(content string) []string {
+	var config struct {
+		Proxies []map[string]interface{} `yaml:"proxies"`
+	}
+
+	// 尝试解析 YAML
+	if err := yaml.Unmarshal([]byte(content), &config); err != nil {
+		return nil
+	}
+
 	var nodes []string
-	seenNodes := make(map[string]bool) // 去重
+	seenNodes := make(map[string]bool)
+
+	for _, proxy := range config.Proxies {
+		if nodeLink := convertClashProxyToLink(proxy); nodeLink != "" {
+			if !seenNodes[nodeLink] {
+				seenNodes[nodeLink] = true
+				nodes = append(nodes, nodeLink)
+			}
+		}
+	}
+
+	return nodes
+}
+
+// parseSingBoxJSON 解析 sing-box JSON 格式
+func (c *Collector) parseSingBoxJSON(content string) []string {
+	var config struct {
+		Outbounds []map[string]interface{} `json:"outbounds"`
+	}
+
+	// 尝试解析 JSON
+	if err := json.Unmarshal([]byte(content), &config); err != nil {
+		return nil
+	}
+
+	var nodes []string
+	seenNodes := make(map[string]bool)
+
+	for _, outbound := range config.Outbounds {
+		if nodeLink := convertSingBoxOutboundToLink(outbound); nodeLink != "" {
+			if !seenNodes[nodeLink] {
+				seenNodes[nodeLink] = true
+				nodes = append(nodes, nodeLink)
+			}
+		}
+	}
+
+	return nodes
+}
+
+// extractNodeLinks 从文本内容中提取所有类型的节点链接
+func (c *Collector) extractNodeLinks(content string) []string {
+	var nodes []string
+	seenNodes := make(map[string]bool)
+
+	// 支持多种分隔符
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -962,13 +1490,8 @@ func (c *Collector) ParseNodes(content string) ([]string, error) {
 			continue
 		}
 
-		// 检查是否是节点链接
-		if strings.HasPrefix(line, "ss://") ||
-			strings.HasPrefix(line, "vmess://") ||
-			strings.HasPrefix(line, "vless://") ||
-			strings.HasPrefix(line, "trojan://") ||
-			strings.HasPrefix(line, "ssr://") {
-			// 去重
+		// 检查是否是节点链接（支持所有协议）
+		if isNodeLink(line) {
 			if !seenNodes[line] {
 				seenNodes[line] = true
 				nodes = append(nodes, line)
@@ -976,11 +1499,29 @@ func (c *Collector) ParseNodes(content string) ([]string, error) {
 		}
 	}
 
-	if len(nodes) == 0 {
-		return nil, fmt.Errorf("未找到有效节点")
-	}
+	return nodes
+}
 
-	return nodes, nil
+// isNodeLink 检查是否是节点链接
+func isNodeLink(line string) bool {
+	return strings.HasPrefix(line, "ss://") ||
+		strings.HasPrefix(line, "vmess://") ||
+		strings.HasPrefix(line, "vless://") ||
+		strings.HasPrefix(line, "trojan://") ||
+		strings.HasPrefix(line, "ssr://") ||
+		strings.HasPrefix(line, "hysteria://") ||
+		strings.HasPrefix(line, "hy2://") ||
+		strings.HasPrefix(line, "wireguard://") ||
+		strings.HasPrefix(line, "wg://") ||
+		strings.HasPrefix(line, "tuic://") ||
+		strings.HasPrefix(line, "http://") ||
+		strings.HasPrefix(line, "https://") ||
+		strings.HasPrefix(line, "socks://") ||
+		strings.HasPrefix(line, "socks4://") ||
+		strings.HasPrefix(line, "socks5://") ||
+		strings.HasPrefix(line, "anytls://") ||
+		strings.HasPrefix(line, "gost://") ||
+		strings.HasPrefix(line, "gost+")
 }
 
 // TestNode 测试节点
@@ -1036,10 +1577,9 @@ func (c *Collector) Collect() error {
 
 	log.Printf("共找到 %d 个链接", len(links))
 
-	// 采集节点
+	// 采集节点（不去重，让所有节点都进行测试，最后统一去重）
 	var allValidNodes []*ValidNode
-	var allParsedNodes []string            // 保存所有解析出的节点（用于去重）
-	seenNodeLinks := make(map[string]bool) // 全局去重
+	var allParsedNodes []string // 保存所有解析出的节点（用于统计）
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(links))
 
@@ -1086,13 +1626,9 @@ func (c *Collector) Collect() error {
 			result.Nodes = nodes
 			log.Printf("链接 %s 解析出 %d 个节点", l, len(nodes))
 
-			// 测试节点
+			// 测试节点（不去重，让所有节点都进行测试，最后统一去重）
 			for _, nodeLink := range nodes {
-				// 全局去重
-				if seenNodeLinks[nodeLink] {
-					continue
-				}
-				seenNodeLinks[nodeLink] = true
+				// 记录所有解析出的节点（用于统计）
 				allParsedNodes = append(allParsedNodes, nodeLink)
 
 				// 默认使用 sing-box 进行真实链接测速
@@ -1105,6 +1641,7 @@ func (c *Collector) Collect() error {
 					// 默认使用 sing-box 进行真实链接测速
 					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
+				// 如果测试通过，添加到结果中（不去重，最后统一去重）
 				if validNode.Error == nil {
 					result.ValidNodes = append(result.ValidNodes, validNode)
 					allValidNodes = append(allValidNodes, validNode)
@@ -1199,10 +1736,9 @@ func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, err
 
 	log.Printf("共找到 %d 个 %s 链接，开始采集节点", len(links), name)
 
-	// 采集节点
+	// 采集节点（不去重，让所有节点都进行测试，最后统一去重）
 	var allValidNodes []*ValidNode
 	var allParsedNodes []string
-	seenNodeLinks := make(map[string]bool)
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(links))
 	var mu sync.Mutex
@@ -1249,17 +1785,12 @@ func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, err
 			result.Nodes = nodes
 			log.Printf("%s 链接 %s 解析出 %d 个节点", name, l, len(nodes))
 
-			// 测试节点
+			// 测试节点（不去重，让所有节点都进行测试）
 			for _, nodeLink := range nodes {
-				// 全局去重
+				// 记录所有解析出的节点（用于统计）
 				mu.Lock()
-				if seenNodeLinks[nodeLink] {
-					mu.Unlock()
-					continue
-				}
-				seenNodeLinks[nodeLink] = true
-				mu.Unlock()
 				allParsedNodes = append(allParsedNodes, nodeLink)
+				mu.Unlock()
 
 				// 默认使用 sing-box 进行真实链接测速
 				var validNode *ValidNode
@@ -1269,6 +1800,7 @@ func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, err
 				} else {
 					validNode = c.TestNodeWithSingBox(nodeLink)
 				}
+				// 如果测试通过，添加到结果中（不去重，最后统一去重）
 				if validNode.Error == nil {
 					result.ValidNodes = append(result.ValidNodes, validNode)
 					mu.Lock()
@@ -1303,7 +1835,12 @@ func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, err
 			log.Printf("%s 链接 %s 处理失败: %v", name, result.Link, result.Error)
 		} else {
 			totalNodes += len(result.Nodes)
-			totalValidNodes += len(result.ValidNodes)
+			// 只统计真正可用的节点（Error == nil）
+			for _, validNode := range result.ValidNodes {
+				if validNode.Error == nil {
+					totalValidNodes++
+				}
+			}
 
 			// 统计所有解析出的节点类型
 			for _, nodeLink := range result.Nodes {
@@ -1312,11 +1849,13 @@ func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, err
 				}
 			}
 
-			// 统计测试结果
+			// 统计测试结果（只统计真正可用的节点）
+			validCount := 0
 			for _, validNode := range result.ValidNodes {
 				if validNode.Type != "" {
 					if validNode.Error == nil {
 						validTypeStats[validNode.Type]++
+						validCount++
 					} else {
 						failedTypeStats[validNode.Type]++
 					}
@@ -1324,7 +1863,7 @@ func (c *Collector) collectNodesGeneric(searchFunc func([]string) ([]string, err
 			}
 
 			log.Printf("%s 链接 %s: 共 %d 个节点，%d 个可用",
-				name, result.Link, len(result.Nodes), len(result.ValidNodes))
+				name, result.Link, len(result.Nodes), validCount)
 		}
 	}
 
@@ -1392,7 +1931,19 @@ func (c *Collector) saveNodesToFile(allValidNodes []*ValidNode, name string) err
 
 	if gistID != "" || gistToken != "" {
 		log.Printf("准备推送到 Gist (ID: %s)...", gistID)
-		if err := c.PushToGist(outputFile, allValidNodes); err != nil {
+		// 只推送测试成功的节点（去重后的）
+		var validNodesForGist []*ValidNode
+		seenGistNodes := make(map[string]bool)
+		for _, node := range allValidNodes {
+			if node.Error == nil {
+				nodeLink := strings.TrimSpace(node.Link)
+				if nodeLink != "" && !seenGistNodes[nodeLink] {
+					seenGistNodes[nodeLink] = true
+					validNodesForGist = append(validNodesForGist, node)
+				}
+			}
+		}
+		if err := c.PushToGist(outputFile, validNodesForGist); err != nil {
 			log.Printf("❌ 推送到 Gist 失败: %v", err)
 		} else {
 			log.Printf("✅ Gist 推送成功，本地文件已保存到 %s", outputFile)
@@ -1642,6 +2193,28 @@ func main() {
 		return
 	}
 
+	// 设置 10 分钟超时
+	timeout := 10 * time.Minute
+	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
+		if d, err := time.ParseDuration(timeoutEnv); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+
+	// 创建带超时的上下文
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// 启动超时监控 goroutine
+	done := make(chan bool, 1)
+	go func() {
+		<-ctx.Done()
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("⏰ 采集超时（%v），停止采集并发布节点", timeout)
+			done <- true
+		}
+	}()
+
 	// 从环境变量获取 GitHub token（可选）
 	githubToken := os.Getenv("GITHUB_TOKEN")
 	if githubToken == "" {
@@ -1650,97 +2223,114 @@ func main() {
 
 	collector := NewCollector(githubToken)
 
-	// 如果设置了 ONLY_GHELPER 环境变量，只运行 ghelper 采集
-	if os.Getenv("ONLY_GHELPER") == "true" {
-		log.Println("========== 仅测试 ghelper 节点采集 ==========")
+	// 在超时前执行采集任务
+	go func() {
+		defer func() {
+			done <- true
+		}()
+
+		// 如果设置了 ONLY_GHELPER 环境变量，只运行 ghelper 采集
+		if os.Getenv("ONLY_GHELPER") == "true" {
+			log.Println("========== 仅测试 ghelper 节点采集 ==========")
+			if err := collector.CollectGhelperNodes(); err != nil {
+				log.Printf("❌ ghelper 节点采集失败: %v", err)
+				os.Exit(1)
+			} else {
+				log.Println("========== ghelper 节点采集完成 ==========")
+			}
+			return
+		}
+
+		// 第一步：采集 JMS 节点（生成 nodes.txt）
+		log.Println("========== 开始采集 JMS 节点 ==========")
+		if err := collector.Collect(); err != nil {
+			log.Printf("JMS 节点采集失败: %v", err)
+		} else {
+			log.Println("========== JMS 节点采集完成 ==========")
+		}
+
+		// 第二步（优先）：采集 ghelper 链接中的节点（追加到 nodes.txt，紧跟在 JMS 之后）
+		log.Println("========== 开始采集 ghelper 链接节点（优先） ==========")
 		if err := collector.CollectGhelperNodes(); err != nil {
-			log.Printf("❌ ghelper 节点采集失败: %v", err)
-			os.Exit(1)
+			log.Printf("ghelper 节点采集失败: %v", err)
 		} else {
 			log.Println("========== ghelper 节点采集完成 ==========")
 		}
-		return
-	}
 
-	// 第一步：采集 JMS 节点（生成 nodes.txt）
-	log.Println("========== 开始采集 JMS 节点 ==========")
-	if err := collector.Collect(); err != nil {
-		log.Printf("JMS 节点采集失败: %v", err)
-	} else {
-		log.Println("========== JMS 节点采集完成 ==========")
-	}
+		// 第三步（优先）：采集 m7r52rosihxm 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 m7r52rosihxm 链接节点（优先） ==========")
+		if err := collector.CollectM7r52rosihxmNodes(); err != nil {
+			log.Printf("m7r52rosihxm 节点采集失败: %v", err)
+		} else {
+			log.Println("========== m7r52rosihxm 节点采集完成 ==========")
+		}
 
-	// 第二步（优先）：采集 ghelper 链接中的节点（追加到 nodes.txt，紧跟在 JMS 之后）
-	log.Println("========== 开始采集 ghelper 链接节点（优先） ==========")
-	if err := collector.CollectGhelperNodes(); err != nil {
-		log.Printf("ghelper 节点采集失败: %v", err)
-	} else {
-		log.Println("========== ghelper 节点采集完成 ==========")
-	}
+		// 第四步（优先）：采集 api/v1/client 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 api/v1/client 链接节点（优先） ==========")
+		if err := collector.CollectApiV1ClientNodes(); err != nil {
+			log.Printf("api/v1/client 节点采集失败: %v", err)
+		} else {
+			log.Println("========== api/v1/client 节点采集完成 ==========")
+		}
 
-	// 第三步（优先）：采集 m7r52rosihxm 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 m7r52rosihxm 链接节点（优先） ==========")
-	if err := collector.CollectM7r52rosihxmNodes(); err != nil {
-		log.Printf("m7r52rosihxm 节点采集失败: %v", err)
-	} else {
-		log.Println("========== m7r52rosihxm 节点采集完成 ==========")
-	}
+		// 第五步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集建森电器链接节点（优先） ==========")
+		if err := collector.CollectJiansendianqiNodes(); err != nil {
+			log.Printf("建森电器节点采集失败: %v", err)
+		} else {
+			log.Println("========== 建森电器节点采集完成 ==========")
+		}
 
-	// 第四步（优先）：采集 api/v1/client 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 api/v1/client 链接节点（优先） ==========")
-	if err := collector.CollectApiV1ClientNodes(); err != nil {
-		log.Printf("api/v1/client 节点采集失败: %v", err)
-	} else {
-		log.Println("========== api/v1/client 节点采集完成 ==========")
-	}
+		// 第六步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 ninjasub 链接节点（优先） ==========")
+		if err := collector.CollectNinjasubNodes(); err != nil {
+			log.Printf("ninjasub 节点采集失败: %v", err)
+		} else {
+			log.Println("========== ninjasub 节点采集完成 ==========")
+		}
 
-	// 第五步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集建森电器链接节点（优先） ==========")
-	if err := collector.CollectJiansendianqiNodes(); err != nil {
-		log.Printf("建森电器节点采集失败: %v", err)
-	} else {
-		log.Println("========== 建森电器节点采集完成 ==========")
-	}
+		// 第七步（优先）：采集 xueshan 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 xueshan 链接节点（优先） ==========")
+		if err := collector.CollectXueshanNodes(); err != nil {
+			log.Printf("xueshan 节点采集失败: %v", err)
+		} else {
+			log.Println("========== xueshan 节点采集完成 ==========")
+		}
 
-	// 第六步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 ninjasub 链接节点（优先） ==========")
-	if err := collector.CollectNinjasubNodes(); err != nil {
-		log.Printf("ninjasub 节点采集失败: %v", err)
-	} else {
-		log.Println("========== ninjasub 节点采集完成 ==========")
-	}
+		// 第八步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 nginx24zfd 链接节点（优先） ==========")
+		if err := collector.CollectNginx24zfdNodes(); err != nil {
+			log.Printf("nginx24zfd 节点采集失败: %v", err)
+		} else {
+			log.Println("========== nginx24zfd 节点采集完成 ==========")
+		}
 
-	// 第七步（优先）：采集 xueshan 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 xueshan 链接节点（优先） ==========")
-	if err := collector.CollectXueshanNodes(); err != nil {
-		log.Printf("xueshan 节点采集失败: %v", err)
-	} else {
-		log.Println("========== xueshan 节点采集完成 ==========")
-	}
+		// 第九步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 iplcme 链接节点（优先） ==========")
+		if err := collector.CollectIplcmeNodes(); err != nil {
+			log.Printf("iplcme 节点采集失败: %v", err)
+		} else {
+			log.Println("========== iplcme 节点采集完成 ==========")
+		}
 
-	// 第八步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 nginx24zfd 链接节点（优先） ==========")
-	if err := collector.CollectNginx24zfdNodes(); err != nil {
-		log.Printf("nginx24zfd 节点采集失败: %v", err)
-	} else {
-		log.Println("========== nginx24zfd 节点采集完成 ==========")
-	}
+		// 第十步（优先）：采集 adfgawidhioawjd 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 adfgawidhioawjd 链接节点（优先） ==========")
+		if err := collector.CollectAdfgawidhioawjdNodes(); err != nil {
+			log.Printf("adfgawidhioawjd 节点采集失败: %v", err)
+		} else {
+			log.Println("========== adfgawidhioawjd 节点采集完成 ==========")
+		}
 
-	// 第九步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 iplcme 链接节点（优先） ==========")
-	if err := collector.CollectIplcmeNodes(); err != nil {
-		log.Printf("iplcme 节点采集失败: %v", err)
-	} else {
-		log.Println("========== iplcme 节点采集完成 ==========")
-	}
+		log.Println("========== 所有采集任务完成 ==========")
+	}()
 
-	// 第十步（优先）：采集 adfgawidhioawjd 链接中的节点（追加到 nodes.txt）
-	log.Println("========== 开始采集 adfgawidhioawjd 链接节点（优先） ==========")
-	if err := collector.CollectAdfgawidhioawjdNodes(); err != nil {
-		log.Printf("adfgawidhioawjd 节点采集失败: %v", err)
-	} else {
-		log.Println("========== adfgawidhioawjd 节点采集完成 ==========")
+	// 等待采集完成或超时
+	select {
+	case <-done:
+		log.Println("========== 采集任务结束 ==========")
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("⏰ 采集超时（%v），停止采集", timeout)
+		}
 	}
-
-	log.Println("========== 所有采集任务完成 ==========")
 }
