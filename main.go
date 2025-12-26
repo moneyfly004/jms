@@ -29,12 +29,8 @@ const (
 var (
 	// 匹配目标链接的正则表达式
 	linkPattern = regexp.MustCompile(`https?://(?:jmssub\.net|jjsubmarines\.com)/members/getsub\.php\?[^\s"']+`)
-	// 匹配 ghelper 链接的正则表达式
-	ghelperLinkPattern = regexp.MustCompile(`https?://[^\s"']*ghelper\.me/subs/[^\s"']*`)
 	// 匹配 m7r52rosihxm 链接的正则表达式
 	m7r52rosihxmLinkPattern = regexp.MustCompile(`https?://[^\s"']*m7r52rosihxm\.com[^\s"']*`)
-	// 匹配 api/v1/client 链接的正则表达式
-	apiV1ClientLinkPattern = regexp.MustCompile(`https?://[^\s"']*/api/v1/client[^\s"']*`)
 	// 匹配建森电器链接的正则表达式
 	jiansendianqiLinkPattern = regexp.MustCompile(`https?://[^\s"']*建森电器\.com[^\s"']*`)
 	// 匹配 ninjasub 链接的正则表达式
@@ -154,76 +150,6 @@ func (c *Collector) SearchGitHub(keywords []string) ([]string, error) {
 	return allLinks, nil
 }
 
-// SearchGhelperLinks 搜索 ghelper 链接
-func (c *Collector) SearchGhelperLinks(keywords []string) ([]string, error) {
-	var allLinks []string
-	seenLinks := make(map[string]bool)
-
-	for _, keyword := range keywords {
-		log.Printf("正在搜索 ghelper 关键词: %s", keyword)
-
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
-
-		var results GitHubSearchResult
-		if err := c.makeRequest(searchURL, &results); err != nil {
-			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
-			continue
-		}
-
-		log.Printf("找到 %d 个结果", results.TotalCount)
-
-		// 处理每个结果
-		for _, item := range results.Items {
-			// 获取文件内容
-			fileContent, err := c.getFileContent(item.APIURL)
-			if err != nil {
-				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-				continue
-			}
-
-			// 只提取 ghelper 链接
-			links := c.extractGhelperLinks(fileContent)
-			for _, link := range links {
-				if !seenLinks[link] {
-					seenLinks[link] = true
-					allLinks = append(allLinks, link)
-					log.Printf("发现新 ghelper 链接: %s", link)
-				}
-			}
-		}
-
-		// 避免速率限制
-		time.Sleep(2 * time.Second)
-	}
-
-	return allLinks, nil
-}
-
-// extractGhelperLinks 提取 ghelper 链接
-func (c *Collector) extractGhelperLinks(content string) []string {
-	var links []string
-	seenLinks := make(map[string]bool)
-
-	// 提取 ghelper 链接（特征：ghelper.me/subs/）
-	ghelperMatches := ghelperLinkPattern.FindAllString(content, -1)
-	for _, match := range ghelperMatches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		// 只保留包含 ghelper.me/subs/ 的链接
-		if link != "" &&
-			strings.Contains(link, "ghelper.me/subs/") &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	return links
-}
-
 // SearchM7r52rosihxmLinks 搜索 m7r52rosihxm 链接（类似 SearchGhelperLinks，但只提取 m7r52rosihxm 链接）
 func (c *Collector) SearchM7r52rosihxmLinks(keywords []string) ([]string, error) {
 	var allLinks []string
@@ -285,78 +211,6 @@ func (c *Collector) extractM7r52rosihxmLinks(content string) []string {
 		// 只保留包含 m7r52rosihxm.com 的链接
 		if link != "" &&
 			strings.Contains(link, "m7r52rosihxm.com") &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	return links
-}
-
-// SearchApiV1ClientLinks 搜索 api/v1/client 链接（类似 SearchGhelperLinks，但只提取 api/v1/client 链接）
-func (c *Collector) SearchApiV1ClientLinks(keywords []string) ([]string, error) {
-	var allLinks []string
-	seenLinks := make(map[string]bool)
-
-	for _, keyword := range keywords {
-		log.Printf("正在搜索 api/v1/client 关键词: %s", keyword)
-
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
-
-		var results GitHubSearchResult
-		if err := c.makeRequest(searchURL, &results); err != nil {
-			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
-			continue
-		}
-
-		log.Printf("找到 %d 个结果", results.TotalCount)
-
-		// 处理每个结果
-		for _, item := range results.Items {
-			// 获取文件内容
-			fileContent, err := c.getFileContent(item.APIURL)
-			if err != nil {
-				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-				continue
-			}
-
-			// 只提取 api/v1/client 链接
-			links := c.extractApiV1ClientLinks(fileContent)
-			for _, link := range links {
-				if !seenLinks[link] {
-					seenLinks[link] = true
-					allLinks = append(allLinks, link)
-					log.Printf("发现新 api/v1/client 链接: %s", link)
-				}
-			}
-		}
-
-		// 避免速率限制
-		time.Sleep(2 * time.Second)
-	}
-
-	return allLinks, nil
-}
-
-// extractApiV1ClientLinks 提取 api/v1/client 链接
-func (c *Collector) extractApiV1ClientLinks(content string) []string {
-	var links []string
-	seenLinks := make(map[string]bool)
-
-	// 提取 api/v1/client 链接（特征：/api/v1/client）
-	apiV1ClientMatches := apiV1ClientLinkPattern.FindAllString(content, -1)
-	for _, match := range apiV1ClientMatches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		// 只保留包含 /api/v1/client 的链接，排除 GitHub 相关链接
-		if link != "" &&
-			strings.Contains(link, "/api/v1/client") &&
-			!strings.Contains(link, "github.com") &&
-			!strings.Contains(link, "raw.githubusercontent.com") &&
 			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
@@ -1953,31 +1807,12 @@ func (c *Collector) saveNodesToFile(allValidNodes []*ValidNode, name string) err
 	return nil
 }
 
-// CollectGhelperNodes 采集 ghelper 链接中的节点，保存到 nodes.txt
-func (c *Collector) CollectGhelperNodes() error {
-	keywords := []string{
-		"ghelper.me/subs",
-		"ghelper.me/subs/",
-	}
-	return c.collectNodesGeneric(c.SearchGhelperLinks, "ghelper", keywords)
-}
-
 // CollectM7r52rosihxmNodes 采集 m7r52rosihxm 链接中的节点，保存到 nodes.txt
 func (c *Collector) CollectM7r52rosihxmNodes() error {
 	keywords := []string{
 		"m7r52rosihxm.com",
 	}
 	return c.collectNodesGeneric(c.SearchM7r52rosihxmLinks, "m7r52rosihxm", keywords)
-}
-
-// CollectApiV1ClientNodes 采集 api/v1/client 链接中的节点，保存到 nodes.txt
-func (c *Collector) CollectApiV1ClientNodes() error {
-	keywords := []string{
-		"api/v1/client",
-		"/api/v1/client/",
-		"api/v1/client/subscribe",
-	}
-	return c.collectNodesGeneric(c.SearchApiV1ClientLinks, "api/v1/client", keywords)
 }
 
 // CollectJiansendianqiNodes 采集建森电器链接中的节点，保存到 nodes.txt
@@ -2229,18 +2064,6 @@ func main() {
 			done <- true
 		}()
 
-		// 如果设置了 ONLY_GHELPER 环境变量，只运行 ghelper 采集
-		if os.Getenv("ONLY_GHELPER") == "true" {
-			log.Println("========== 仅测试 ghelper 节点采集 ==========")
-			if err := collector.CollectGhelperNodes(); err != nil {
-				log.Printf("❌ ghelper 节点采集失败: %v", err)
-				os.Exit(1)
-			} else {
-				log.Println("========== ghelper 节点采集完成 ==========")
-			}
-			return
-		}
-
 		// 第一步：采集 JMS 节点（生成 nodes.txt）
 		log.Println("========== 开始采集 JMS 节点 ==========")
 		if err := collector.Collect(); err != nil {
@@ -2249,15 +2072,7 @@ func main() {
 			log.Println("========== JMS 节点采集完成 ==========")
 		}
 
-		// 第二步（优先）：采集 ghelper 链接中的节点（追加到 nodes.txt，紧跟在 JMS 之后）
-		log.Println("========== 开始采集 ghelper 链接节点（优先） ==========")
-		if err := collector.CollectGhelperNodes(); err != nil {
-			log.Printf("ghelper 节点采集失败: %v", err)
-		} else {
-			log.Println("========== ghelper 节点采集完成 ==========")
-		}
-
-		// 第三步（优先）：采集 m7r52rosihxm 链接中的节点（追加到 nodes.txt）
+		// 第二步（优先）：采集 m7r52rosihxm 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 m7r52rosihxm 链接节点（优先） ==========")
 		if err := collector.CollectM7r52rosihxmNodes(); err != nil {
 			log.Printf("m7r52rosihxm 节点采集失败: %v", err)
@@ -2265,15 +2080,7 @@ func main() {
 			log.Println("========== m7r52rosihxm 节点采集完成 ==========")
 		}
 
-		// 第四步（优先）：采集 api/v1/client 链接中的节点（追加到 nodes.txt）
-		log.Println("========== 开始采集 api/v1/client 链接节点（优先） ==========")
-		if err := collector.CollectApiV1ClientNodes(); err != nil {
-			log.Printf("api/v1/client 节点采集失败: %v", err)
-		} else {
-			log.Println("========== api/v1/client 节点采集完成 ==========")
-		}
-
-		// 第五步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
+		// 第三步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集建森电器链接节点（优先） ==========")
 		if err := collector.CollectJiansendianqiNodes(); err != nil {
 			log.Printf("建森电器节点采集失败: %v", err)
@@ -2281,7 +2088,7 @@ func main() {
 			log.Println("========== 建森电器节点采集完成 ==========")
 		}
 
-		// 第六步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
+		// 第四步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 ninjasub 链接节点（优先） ==========")
 		if err := collector.CollectNinjasubNodes(); err != nil {
 			log.Printf("ninjasub 节点采集失败: %v", err)
@@ -2289,7 +2096,7 @@ func main() {
 			log.Println("========== ninjasub 节点采集完成 ==========")
 		}
 
-		// 第七步（优先）：采集 xueshan 链接中的节点（追加到 nodes.txt）
+		// 第五步（优先）：采集 xueshan 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 xueshan 链接节点（优先） ==========")
 		if err := collector.CollectXueshanNodes(); err != nil {
 			log.Printf("xueshan 节点采集失败: %v", err)
@@ -2297,7 +2104,7 @@ func main() {
 			log.Println("========== xueshan 节点采集完成 ==========")
 		}
 
-		// 第八步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
+		// 第六步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 nginx24zfd 链接节点（优先） ==========")
 		if err := collector.CollectNginx24zfdNodes(); err != nil {
 			log.Printf("nginx24zfd 节点采集失败: %v", err)
@@ -2305,7 +2112,7 @@ func main() {
 			log.Println("========== nginx24zfd 节点采集完成 ==========")
 		}
 
-		// 第九步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
+		// 第七步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 iplcme 链接节点（优先） ==========")
 		if err := collector.CollectIplcmeNodes(); err != nil {
 			log.Printf("iplcme 节点采集失败: %v", err)
@@ -2313,7 +2120,7 @@ func main() {
 			log.Println("========== iplcme 节点采集完成 ==========")
 		}
 
-		// 第十步（优先）：采集 adfgawidhioawjd 链接中的节点（追加到 nodes.txt）
+		// 第八步（优先）：采集 adfgawidhioawjd 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 adfgawidhioawjd 链接节点（优先） ==========")
 		if err := collector.CollectAdfgawidhioawjdNodes(); err != nil {
 			log.Printf("adfgawidhioawjd 节点采集失败: %v", err)
