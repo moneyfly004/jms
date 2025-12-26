@@ -51,7 +51,6 @@ jobs:
         GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
         GIST_ID: ${{ secrets.GIST_ID }}
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-        SUB_GIST_ID: ${{ secrets.SUB_GIST_ID }}
         MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '10' }}
         TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '10' }}
         SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
@@ -59,7 +58,7 @@ jobs:
         TEST_SPEED: ${{ secrets.TEST_SPEED || 'false' }}
         SINGBOX_PATH: ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
       run: |
-        go run main.go config.go node_parser.go gist.go singbox.go glados_parser.go glados_collector.go
+        go run main.go config.go node_parser.go gist.go singbox.go subscribe.go
         
     - name: 提交并推送结果
       env:
@@ -77,15 +76,6 @@ jobs:
           echo "⚠️ nodes.txt 文件不存在"
         fi
         
-        # 检查并提交 sub.txt
-        if [ -f sub.txt ]; then
-          sub_count=$(wc -l < sub.txt | tr -d ' ')
-          echo "📊 sub.txt 包含 $sub_count 个订阅节点"
-          git add sub.txt
-        else
-          echo "⚠️ sub.txt 文件不存在"
-        fi
-        
         # 检查是否有未提交的更改
         if git diff --staged --quiet; then
           echo "ℹ️ 没有新的节点更新（文件内容未变化）"
@@ -94,9 +84,6 @@ jobs:
           commit_msg="自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')]"
           if [ -f nodes.txt ]; then
             commit_msg="$commit_msg - nodes: $node_count"
-          fi
-          if [ -f sub.txt ]; then
-            commit_msg="$commit_msg - sub: $sub_count"
           fi
           git commit -m "$commit_msg"
           git push
