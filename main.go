@@ -1940,23 +1940,6 @@ func (c *Collector) PushToGitHub(filePath string, nodes []*ValidNode) error {
 }
 
 func main() {
-	// 如果设置了 TEST_SINGBOX_NODES 环境变量，运行测试模式
-	if os.Getenv("TEST_SINGBOX_NODES") == "true" {
-		testSingBoxNodes()
-		return
-	}
-
-	// 如果设置了 TEST_SUBSCRIPTION 环境变量，运行订阅测试模式
-	if os.Getenv("TEST_SUBSCRIPTION") == "true" {
-		testSubscription()
-		return
-	}
-
-	// 如果设置了 TEST_DEDUP 环境变量，运行去重逻辑测试
-	if os.Getenv("TEST_DEDUP") == "true" {
-		testDedup()
-		return
-	}
 
 	// 设置 10 分钟超时
 	timeout := 10 * time.Minute
