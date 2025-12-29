@@ -1705,7 +1705,7 @@ func (c *Collector) saveNodesToFile(allValidNodes []*ValidNode, name string) err
 
 	// 将所有节点链接合并为字符串（每行一个）
 	plainContent := strings.Join(allNodes, "\n")
-	
+
 	// 进行 Base64 编码，以便 v2rayN 等客户端订阅使用
 	encodedContent := base64.StdEncoding.EncodeToString([]byte(plainContent))
 
@@ -1804,19 +1804,19 @@ func (c *Collector) CollectIplcmeNodes() error {
 func (c *Collector) SaveResults(nodes []*ValidNode) error {
 	// 创建输出文件
 	outputFile := "nodes.txt"
-	
+
 	// 收集所有节点链接
 	var nodeLinks []string
 	for _, node := range nodes {
 		nodeLinks = append(nodeLinks, node.Link)
 	}
-	
+
 	// 将所有节点链接合并为字符串（每行一个）
 	plainContent := strings.Join(nodeLinks, "\n")
-	
+
 	// 进行 Base64 编码，以便 v2rayN 等客户端订阅使用
 	encodedContent := base64.StdEncoding.EncodeToString([]byte(plainContent))
-	
+
 	// 写入文件（Base64 编码后的内容）
 	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
 		return fmt.Errorf("写入文件失败: %v", err)
@@ -1851,13 +1851,13 @@ func (c *Collector) SaveResults(nodes []*ValidNode) error {
 func (c *Collector) SaveAllNodes(nodeLinks []string) error {
 	// 创建输出文件
 	outputFile := "nodes.txt"
-	
+
 	// 将所有节点链接合并为字符串（每行一个）
 	plainContent := strings.Join(nodeLinks, "\n")
-	
+
 	// 进行 Base64 编码，以便 v2rayN 等客户端订阅使用
 	encodedContent := base64.StdEncoding.EncodeToString([]byte(plainContent))
-	
+
 	// 写入文件（Base64 编码后的内容）
 	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
 		return fmt.Errorf("写入文件失败: %v", err)
