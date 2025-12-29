@@ -1677,6 +1677,14 @@ func (c *Collector) saveNodesToFile(allValidNodes []*ValidNode, name string) err
 
 	// 先添加现有节点
 	if existingContent != "" {
+		// 尝试解码 Base64（如果文件是 Base64 编码的）
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(existingContent))
+		if err == nil {
+			// 成功解码，说明文件是 Base64 编码的
+			existingContent = string(decoded)
+		}
+		// 如果解码失败，说明文件是原始格式，直接使用
+
 		lines := strings.Split(strings.TrimSpace(existingContent), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -1695,14 +1703,19 @@ func (c *Collector) saveNodesToFile(allValidNodes []*ValidNode, name string) err
 		}
 	}
 
-	// 写入文件
+	// 将所有节点链接合并为字符串（每行一个）
+	plainContent := strings.Join(allNodes, "\n")
+	
+	// 进行 Base64 编码，以便 v2rayN 等客户端订阅使用
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(plainContent))
+
+	// 写入文件（Base64 编码后的内容）
 	outputFile := "nodes.txt"
-	content := strings.Join(allNodes, "\n")
-	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
 		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
-	log.Printf("%s 节点已保存到 %s，共 %d 个节点（包含现有节点）", name, outputFile, len(allNodes))
+	log.Printf("%s 节点已保存到 %s，共 %d 个节点（包含现有节点，已 Base64 编码）", name, outputFile, len(allNodes))
 
 	// 推送到 Gist（如果配置了）
 	gistID := os.Getenv("GIST_ID")
@@ -1791,18 +1804,25 @@ func (c *Collector) CollectIplcmeNodes() error {
 func (c *Collector) SaveResults(nodes []*ValidNode) error {
 	// 创建输出文件
 	outputFile := "nodes.txt"
-	file, err := os.Create(outputFile)
-	if err != nil {
-		return fmt.Errorf("创建文件失败: %v", err)
-	}
-	defer file.Close()
-
-	// 写入节点
+	
+	// 收集所有节点链接
+	var nodeLinks []string
 	for _, node := range nodes {
-		file.WriteString(node.Link + "\n")
+		nodeLinks = append(nodeLinks, node.Link)
+	}
+	
+	// 将所有节点链接合并为字符串（每行一个）
+	plainContent := strings.Join(nodeLinks, "\n")
+	
+	// 进行 Base64 编码，以便 v2rayN 等客户端订阅使用
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(plainContent))
+	
+	// 写入文件（Base64 编码后的内容）
+	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
-	log.Printf("结果已保存到 %s，共 %d 个节点", outputFile, len(nodes))
+	log.Printf("结果已保存到 %s，共 %d 个节点（已 Base64 编码）", outputFile, len(nodes))
 
 	// 优先推送到 Gist（适用于私有仓库）
 	gistID := os.Getenv("GIST_ID")
@@ -1831,18 +1851,19 @@ func (c *Collector) SaveResults(nodes []*ValidNode) error {
 func (c *Collector) SaveAllNodes(nodeLinks []string) error {
 	// 创建输出文件
 	outputFile := "nodes.txt"
-	file, err := os.Create(outputFile)
-	if err != nil {
-		return fmt.Errorf("创建文件失败: %v", err)
+	
+	// 将所有节点链接合并为字符串（每行一个）
+	plainContent := strings.Join(nodeLinks, "\n")
+	
+	// 进行 Base64 编码，以便 v2rayN 等客户端订阅使用
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(plainContent))
+	
+	// 写入文件（Base64 编码后的内容）
+	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
 	}
-	defer file.Close()
 
-	// 写入节点
-	for _, nodeLink := range nodeLinks {
-		file.WriteString(nodeLink + "\n")
-	}
-
-	log.Printf("结果已保存到 %s，共 %d 个节点（包括测试失败的）", outputFile, len(nodeLinks))
+	log.Printf("结果已保存到 %s，共 %d 个节点（包括测试失败的，已 Base64 编码）", outputFile, len(nodeLinks))
 
 	// 转换为 ValidNode 格式
 	var nodes []*ValidNode

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,20 +25,34 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 		return fmt.Errorf("需要 GIST_TOKEN 或 GITHUB_TOKEN 才能推送到 Gist")
 	}
 
-	// 读取文件内容
+	// 读取文件内容（文件内容是 Base64 编码的）
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("读取文件失败: %v", err)
 	}
 	
-	// 验证文件内容
+	// 文件内容是 Base64 编码的，直接使用（客户端会解码）
 	contentStr := string(content)
-	fileNodeCount := len(strings.Split(strings.TrimSpace(contentStr), "\n"))
-	if strings.TrimSpace(contentStr) == "" {
-		fileNodeCount = 0
+	
+	// 尝试解码以验证和统计节点数量
+	var fileNodeCount int
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(contentStr))
+	if err == nil {
+		// 成功解码，统计节点数量
+		decodedStr := string(decoded)
+		lines := strings.Split(strings.TrimSpace(decodedStr), "\n")
+		if strings.TrimSpace(decodedStr) == "" {
+			fileNodeCount = 0
+		} else {
+			fileNodeCount = len(lines)
+		}
+	} else {
+		// 解码失败，使用节点数组长度
+		fileNodeCount = len(nodes)
+		log.Printf("⚠️ 无法解码文件内容，使用节点数组长度")
 	}
 	
-	log.Printf("📄 读取文件 %s，包含 %d 行节点", filePath, fileNodeCount)
+	log.Printf("📄 读取文件 %s，包含 %d 个节点（Base64 编码）", filePath, fileNodeCount)
 	log.Printf("📊 准备推送 %d 个节点到 Gist", len(nodes))
 	
 	// 验证节点数量是否一致
