@@ -1971,6 +1971,113 @@ func (c *Collector) PushToGitHub(filePath string, nodes []*ValidNode) error {
 	return nil
 }
 
+// testSubscribe 测试订阅地址
+func testSubscribe(subscribeURL string) {
+	log.Printf("\n========== 开始测试订阅地址: %s ==========", subscribeURL)
+
+	collector := NewCollector("")
+
+	// 获取订阅内容
+	content, err := collector.FetchSubscription(subscribeURL)
+	if err != nil {
+		log.Printf("❌ 获取订阅内容失败: %v", err)
+		return
+	}
+
+	log.Printf("✅ 成功获取订阅内容，长度: %d 字节", len(content))
+
+	// 解析节点
+	nodes, err := collector.ParseNodes(content)
+	if err != nil {
+		log.Printf("⚠️ 解析节点失败: %v，尝试从原始内容提取", err)
+		nodes = collector.extractNodesFromRawContent(content)
+		if len(nodes) == 0 {
+			log.Printf("❌ 无法解析任何节点")
+			return
+		}
+	}
+
+	log.Printf("📊 解析出 %d 个节点", len(nodes))
+
+	// 测试节点
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var validNodes []*ValidNode
+	var failedNodes []*ValidNode
+
+	maxConcurrency := 5 // 限制并发数，避免过多资源占用
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	for i, nodeLink := range nodes {
+		wg.Add(1)
+		go func(index int, link string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			// 使用 sing-box 测试（如果可用）
+			var validNode *ValidNode
+			useSingBox := os.Getenv("USE_SINGBOX")
+			if useSingBox == "false" {
+				validNode = collector.TestNode(link)
+			} else {
+				validNode = collector.TestNodeWithSingBox(link)
+			}
+
+			mu.Lock()
+			if validNode.Error == nil {
+				validNodes = append(validNodes, validNode)
+				log.Printf("✅ [%d/%d] 节点可用 - 延迟: %v, 类型: %s",
+					index+1, len(nodes), validNode.Latency, validNode.Type)
+			} else {
+				failedNodes = append(failedNodes, validNode)
+				log.Printf("❌ [%d/%d] 节点不可用 - 类型: %s, 错误: %v",
+					index+1, len(nodes), validNode.Type, validNode.Error)
+			}
+			mu.Unlock()
+		}(i, nodeLink)
+	}
+
+	wg.Wait()
+
+	// 输出统计结果
+	log.Printf("\n========== 测试结果统计 ==========")
+	log.Printf("订阅地址: %s", subscribeURL)
+	log.Printf("总节点数: %d", len(nodes))
+	log.Printf("✅ 可用节点: %d", len(validNodes))
+	log.Printf("❌ 不可用节点: %d", len(failedNodes))
+
+	if len(validNodes) > 0 {
+		log.Printf("\n可用节点列表:")
+		for i, node := range validNodes {
+			log.Printf("  %d. 类型: %s, 延迟: %v", i+1, node.Type, node.Latency)
+		}
+	}
+
+	log.Printf("\n")
+}
+
+// testSubscribes 测试订阅地址的主函数（独立运行）
+func testSubscribes() {
+	// 从命令行参数读取订阅地址（从第二个参数开始）
+	if len(os.Args) < 3 {
+		fmt.Println("用法: go run . test-subscribe <订阅地址1> [订阅地址2] ...")
+		fmt.Println("示例: go run . test-subscribe https://example.com/subscribe?token=xxx")
+		return
+	}
+
+	subscribeURLs := os.Args[2:] // 从第二个参数开始的所有参数都是订阅地址
+
+	for i, url := range subscribeURLs {
+		if i > 0 {
+			time.Sleep(2 * time.Second) // 间隔一下，避免请求过快
+		}
+		testSubscribe(url)
+	}
+
+	fmt.Println("\n========== 所有测试完成 ==========")
+}
+
 func main() {
 	// 检查是否是测试订阅地址模式
 	if len(os.Args) > 1 && os.Args[1] == "test-subscribe" {
