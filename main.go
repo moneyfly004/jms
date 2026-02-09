@@ -1364,6 +1364,7 @@ func (c *Collector) Collect() error {
 	var allParsedNodes []string // 保存所有解析出的节点（用于统计）
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(links))
+	var mu sync.Mutex
 
 	// 并发采集
 	maxConcurrency := 10
@@ -1411,7 +1412,9 @@ func (c *Collector) Collect() error {
 			// 测试节点（不去重，让所有节点都进行测试，最后统一去重）
 			for _, nodeLink := range nodes {
 				// 记录所有解析出的节点（用于统计）
+				mu.Lock()
 				allParsedNodes = append(allParsedNodes, nodeLink)
+				mu.Unlock()
 
 				// 默认使用 sing-box 进行真实链接测速
 				var validNode *ValidNode
@@ -1426,7 +1429,9 @@ func (c *Collector) Collect() error {
 				// 如果测试通过，添加到结果中（不去重，最后统一去重）
 				if validNode.Error == nil {
 					result.ValidNodes = append(result.ValidNodes, validNode)
+					mu.Lock()
 					allValidNodes = append(allValidNodes, validNode)
+					mu.Unlock()
 				} else {
 					// 记录测试失败的节点类型（用于统计）
 					if validNode.Type != "" {
@@ -1456,7 +1461,13 @@ func (c *Collector) Collect() error {
 			log.Printf("链接 %s 处理失败: %v", result.Link, result.Error)
 		} else {
 			totalNodes += len(result.Nodes)
-			totalValidNodes += len(result.ValidNodes)
+			validCount := 0
+			for _, validNode := range result.ValidNodes {
+				if validNode.Error == nil {
+					validCount++
+				}
+			}
+			totalValidNodes += validCount
 
 			// 统计所有解析出的节点类型
 			for _, nodeLink := range result.Nodes {
@@ -1477,7 +1488,7 @@ func (c *Collector) Collect() error {
 			}
 
 			log.Printf("链接 %s: 共 %d 个节点，%d 个可用",
-				result.Link, len(result.Nodes), len(result.ValidNodes))
+				result.Link, len(result.Nodes), validCount)
 		}
 	}
 
@@ -1961,6 +1972,11 @@ func (c *Collector) PushToGitHub(filePath string, nodes []*ValidNode) error {
 }
 
 func main() {
+	// 检查是否是测试订阅地址模式
+	if len(os.Args) > 1 && os.Args[1] == "test-subscribe" {
+		testSubscribes()
+		return
+	}
 
 	// 设置 10 分钟超时
 	timeout := 10 * time.Minute
