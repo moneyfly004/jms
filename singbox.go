@@ -455,8 +455,8 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		return 0, err
 	}
 
-	// 启动 sing-box 进行真实连接测试
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 启动 sing-box 进行真实连接测试（减少超时时间，提高速度）
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	cmd = exec.CommandContext(ctx, singBoxPath, "run", "-c", configFile)
@@ -476,13 +476,13 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		}
 	}()
 
-	// 等待 sing-box 启动（增加等待时间）
-	maxWait := 5 * time.Second
-	waitInterval := 200 * time.Millisecond
+	// 等待 sing-box 启动（减少等待时间，提高速度）
+	maxWait := 3 * time.Second             // 减少到 3 秒
+	waitInterval := 100 * time.Millisecond // 减少间隔时间
 	waited := time.Duration(0)
 	for waited < maxWait {
 		// 检查端口是否已监听
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 50*time.Millisecond)
 		if err == nil {
 			conn.Close()
 			break
@@ -514,7 +514,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 
 	// 从环境变量读取超时时间
 	timeoutStr := os.Getenv("TEST_TIMEOUT")
-	timeout := 20 * time.Second // 默认增加到 20 秒
+	timeout := 8 * time.Second // 默认 8 秒，提高速度
 	if timeoutStr != "" {
 		if seconds, err := time.ParseDuration(timeoutStr + "s"); err == nil && seconds > 0 {
 			timeout = seconds
@@ -532,10 +532,10 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		// 移除 DialContext，因为使用代理时应该通过代理连接，而不是直接连接
 		// 设置代理连接超时
 		ProxyConnectHeader:    make(http.Header),
-		ResponseHeaderTimeout: 10 * time.Second, // 响应头超时
+		ResponseHeaderTimeout: 5 * time.Second,  // 响应头超时，减少到 5 秒
 		IdleConnTimeout:       30 * time.Second, // 空闲连接超时
 		DisableKeepAlives:     false,            // 启用 Keep-Alive
-		TLSHandshakeTimeout:   8 * time.Second,  // TLS 握手超时
+		TLSHandshakeTimeout:   4 * time.Second,  // TLS 握手超时，减少到 4 秒
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
@@ -548,16 +548,16 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		},
 	}
 
-	// 多次测试取平均值，提高准确性
-	testCount := 3 // 默认测试 3 次，提高准确性
+	// 减少测试次数以提高速度
+	testCount := 1 // 默认只测试 1 次，提高速度
 	if testCountEnv := os.Getenv("TEST_COUNT"); testCountEnv != "" {
-		if n, err := strconv.Atoi(testCountEnv); err == nil && n > 0 && n <= 5 {
+		if n, err := strconv.Atoi(testCountEnv); err == nil && n > 0 && n <= 3 {
 			testCount = n
 		}
 	}
 
-	// 计算最小成功次数（至少 80% 成功率）
-	minSuccessCount := int(float64(testCount) * 0.8)
+	// 计算最小成功次数（至少 50% 成功率，提高速度）
+	minSuccessCount := int(float64(testCount) * 0.5)
 	if minSuccessCount < 1 {
 		minSuccessCount = 1
 	}
@@ -567,7 +567,8 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	urlSuccessCount := 0 // 记录成功测试的 URL 数量
 
 	// 尝试多个测试 URL，每个 URL 测试多次
-	for _, testURL := range testURLs {
+	// 优化：只测试第一个 URL，如果成功就返回，提高速度
+	for idx, testURL := range testURLs {
 		var urlLatencies []time.Duration
 		successCount := 0
 		urlErrors := []error{}
@@ -626,7 +627,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 			}
 		}
 
-		// 只有成功次数达到最小要求（至少 80%）才认为这个 URL 测试通过
+		// 只有成功次数达到最小要求（至少 50%）才认为这个 URL 测试通过
 		if successCount >= minSuccessCount && len(urlLatencies) > 0 {
 			var sum time.Duration
 			for _, lat := range urlLatencies {
@@ -636,8 +637,10 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 			successfulTests = append(successfulTests, avgLatency)
 			urlSuccessCount++
 
-			// 如果至少有一个 URL 测试通过，且成功率足够高，返回结果
-			// 但继续测试其他 URL 以获得更准确的平均值
+			// 优化：如果第一个 URL 测试通过，立即返回结果，提高速度
+			if idx == 0 {
+				return avgLatency, nil
+			}
 		}
 	}
 
