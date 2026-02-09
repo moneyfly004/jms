@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -496,11 +498,11 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	// 通过代理测试真实连接
 	// 使用多个可靠的测试 URL，按优先级排序
 	testURLs := []string{
-		"http://www.google.com/generate_204",  // Google 204 响应，最快
-		"http://www.cloudflare.com",            // Cloudflare，稳定
-		"http://1.1.1.1",                       // Cloudflare DNS，简单
-		"http://www.baidu.com",                 // 百度，国内可访问
-		"http://www.microsoft.com",             // 微软，备用
+		"http://www.google.com/generate_204", // Google 204 响应，最快
+		"http://www.cloudflare.com",          // Cloudflare，稳定
+		"http://1.1.1.1",                     // Cloudflare DNS，简单
+		"http://www.baidu.com",               // 百度，国内可访问
+		"http://www.microsoft.com",           // 微软，备用
 	}
 
 	// 从环境变量读取测试 URL（如果设置了）
@@ -520,52 +522,63 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 创建 HTTP 客户端，使用代理
-	proxyFunc := func(_ *http.Request) (*url.URL, error) {
-		return url.Parse(proxyURL)
+	proxyURLParsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return 0, fmt.Errorf("解析代理 URL 失败: %v", err)
 	}
+
 	transport := &http.Transport{
-		Proxy: proxyFunc,
-		// 增加连接超时和响应超时
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{
-				Timeout:   8 * time.Second,  // 连接超时
-				KeepAlive: 30 * time.Second, // Keep-Alive
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
-		ResponseHeaderTimeout: 8 * time.Second,  // 响应头超时
+		Proxy: http.ProxyURL(proxyURLParsed),
+		// 移除 DialContext，因为使用代理时应该通过代理连接，而不是直接连接
+		// 设置代理连接超时
+		ProxyConnectHeader:    make(http.Header),
+		ResponseHeaderTimeout: 10 * time.Second, // 响应头超时
 		IdleConnTimeout:       30 * time.Second, // 空闲连接超时
 		DisableKeepAlives:     false,            // 启用 Keep-Alive
-		TLSHandshakeTimeout:   5 * time.Second,  // TLS 握手超时
+		TLSHandshakeTimeout:   8 * time.Second,  // TLS 握手超时
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   timeout,
+		// 禁用自动重定向，手动处理以确保通过代理
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
 	// 多次测试取平均值，提高准确性
-	testCount := 2 // 默认测试 2 次
+	testCount := 3 // 默认测试 3 次，提高准确性
 	if testCountEnv := os.Getenv("TEST_COUNT"); testCountEnv != "" {
 		if n, err := strconv.Atoi(testCountEnv); err == nil && n > 0 && n <= 5 {
 			testCount = n
 		}
 	}
 
+	// 计算最小成功次数（至少 80% 成功率）
+	minSuccessCount := int(float64(testCount) * 0.8)
+	if minSuccessCount < 1 {
+		minSuccessCount = 1
+	}
+
 	var successfulTests []time.Duration
 	var lastErr error
+	urlSuccessCount := 0 // 记录成功测试的 URL 数量
 
 	// 尝试多个测试 URL，每个 URL 测试多次
 	for _, testURL := range testURLs {
 		var urlLatencies []time.Duration
 		successCount := 0
+		urlErrors := []error{}
 
 		// 对每个 URL 进行多次测试
 		for i := 0; i < testCount; i++ {
 			start := time.Now()
-			req, err := http.NewRequest("GET", testURL, nil)
+			req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 			if err != nil {
-				lastErr = fmt.Errorf("创建请求失败: %v", err)
+				urlErrors = append(urlErrors, fmt.Errorf("创建请求失败: %v", err))
+				lastErr = err
 				continue
 			}
 
@@ -578,7 +591,9 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 			resp, err := client.Do(req)
 			if err != nil {
 				// 记录错误但继续尝试
-				lastErr = fmt.Errorf("代理连接失败: %v", err)
+				errMsg := fmt.Errorf("代理连接失败: %v", err)
+				urlErrors = append(urlErrors, errMsg)
+				lastErr = errMsg
 				continue
 			}
 
@@ -587,45 +602,54 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 
 			// 读取响应体（至少读取一部分）以确保连接完全建立
 			body := make([]byte, 1024)
-			resp.Body.Read(body)
+			n, readErr := resp.Body.Read(body)
 			resp.Body.Close()
 
-			// 如果状态码是 200-299，说明连接成功
-			if statusCode >= 200 && statusCode < 300 {
-				urlLatencies = append(urlLatencies, latency)
-				successCount++
+			// 检查读取错误和状态码
+			// 如果读取失败且没有读取到任何数据（且不是正常的 EOF），认为连接失败
+			if readErr != nil && !errors.Is(readErr, io.EOF) && n == 0 {
+				errMsg := fmt.Errorf("读取响应体失败: %v", readErr)
+				urlErrors = append(urlErrors, errMsg)
+				lastErr = errMsg
 				continue
 			}
 
-			// 对于 502、503、504 等错误，说明代理连接成功，但目标服务器有问题
-			// 这种情况下，我们认为代理是可用的（因为代理能连接，只是目标服务器有问题）
-			if statusCode >= 500 && statusCode < 600 {
+			// 2xx/3xx 认为连接成功，但需要确保至少读取了一些数据
+			if statusCode >= 200 && statusCode < 400 && n > 0 {
 				urlLatencies = append(urlLatencies, latency)
 				successCount++
-				continue
+			} else {
+				// 对于其他错误，记录但继续
+				errMsg := fmt.Errorf("HTTP 状态码: %d 或响应体为空", statusCode)
+				urlErrors = append(urlErrors, errMsg)
+				lastErr = errMsg
 			}
-
-			// 对于其他错误，记录但继续
-			lastErr = fmt.Errorf("HTTP 状态码: %d", statusCode)
 		}
 
-		// 如果这个 URL 有成功的测试，计算平均延迟
-		if len(urlLatencies) > 0 {
+		// 只有成功次数达到最小要求（至少 80%）才认为这个 URL 测试通过
+		if successCount >= minSuccessCount && len(urlLatencies) > 0 {
 			var sum time.Duration
 			for _, lat := range urlLatencies {
 				sum += lat
 			}
 			avgLatency := sum / time.Duration(len(urlLatencies))
 			successfulTests = append(successfulTests, avgLatency)
+			urlSuccessCount++
 
-			// 如果成功率达到要求（至少 50%），使用这个结果
-			if successCount >= (testCount+1)/2 {
-				return avgLatency, nil
-			}
+			// 如果至少有一个 URL 测试通过，且成功率足够高，返回结果
+			// 但继续测试其他 URL 以获得更准确的平均值
 		}
 	}
 
-	// 如果有任何成功的测试，返回平均值
+	// 必须至少有一个 URL 的所有测试都达到最小成功率要求，才认为节点可用
+	if urlSuccessCount == 0 {
+		if lastErr != nil {
+			return 0, fmt.Errorf("所有测试 URL 都失败，最后错误: %v", lastErr)
+		}
+		return 0, fmt.Errorf("所有测试 URL 都失败，未达到最小成功率要求（%d/%d）", minSuccessCount, testCount)
+	}
+
+	// 计算所有成功测试的平均延迟
 	if len(successfulTests) > 0 {
 		var sum time.Duration
 		for _, lat := range successfulTests {
@@ -636,7 +660,10 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 所有测试都失败
-	return 0, lastErr
+	if lastErr != nil {
+		return 0, fmt.Errorf("所有测试都失败: %v", lastErr)
+	}
+	return 0, fmt.Errorf("所有测试都失败，未达到最小成功率要求（%d/%d）", minSuccessCount, testCount)
 }
 
 // testSpeedWithSingBox 使用 sing-box 测试速度
