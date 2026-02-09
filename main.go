@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,8 @@ var (
 	nginx24zfdLinkPattern = regexp.MustCompile(`https?://[^\s"']*nginx24zfd\.xyz/link/[^\s"']*`)
 	// 匹配 iplcme 链接的正则表达式
 	iplcmeLinkPattern = regexp.MustCompile(`https?://[^\s"']*iplcme\.com[^\s"']*`)
+	// 匹配包含 /api/v1/client/subscribe?token= 的链接的正则表达式
+	subscribeTokenPattern = regexp.MustCompile(`https?://[^\s"']*/api/v1/client/subscribe\?token=[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -1321,8 +1324,8 @@ func (c *Collector) TestNode(nodeLink string) *ValidNode {
 
 	result.Type = node.Type
 
-	// TCP 连接测试
-	timeout := 5 * time.Second
+	// TCP 连接测试（减少超时时间，提高速度）
+	timeout := 3 * time.Second // 减少到 3 秒
 	if timeoutEnv := os.Getenv("TEST_TIMEOUT"); timeoutEnv != "" {
 		if n, err := strconv.Atoi(timeoutEnv); err == nil && n > 0 {
 			timeout = time.Duration(n) * time.Second
@@ -1366,8 +1369,8 @@ func (c *Collector) Collect() error {
 	resultsChan := make(chan *NodeResult, len(links))
 	var mu sync.Mutex
 
-	// 并发采集
-	maxConcurrency := 10
+	// 并发采集，增加并发数以提高速度
+	maxConcurrency := 20 // 默认增加到 20，提高速度
 	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
 		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
 			maxConcurrency = n
@@ -1811,6 +1814,295 @@ func (c *Collector) CollectIplcmeNodes() error {
 	return c.collectNodesGeneric(c.SearchIplcmeLinks, "iplcme", keywords)
 }
 
+// SearchSubscribeTokenLinks 搜索包含 /api/v1/client/subscribe?token= 的链接
+// 只返回一周内更新的文件中的链接
+func (c *Collector) SearchSubscribeTokenLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	// 计算一周前的时间
+	oneWeekAgo := time.Now().AddDate(0, 0, -7)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索订阅 token 关键词: %s", keyword)
+
+		// GitHub API 搜索代码
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		// 处理每个结果
+		for _, item := range results.Items {
+			// 检查文件的更新时间，只处理一周内更新的文件
+			if item.UpdatedAt != "" {
+				updatedTime, err := time.Parse(time.RFC3339, item.UpdatedAt)
+				if err != nil {
+					// 如果解析失败，尝试其他格式
+					updatedTime, err = time.Parse("2006-01-02T15:04:05Z", item.UpdatedAt)
+					if err != nil {
+						log.Printf("无法解析文件更新时间 %s: %v，跳过", item.UpdatedAt, err)
+						continue
+					}
+				}
+
+				// 如果文件更新时间超过一周，跳过
+				if updatedTime.Before(oneWeekAgo) {
+					log.Printf("文件 %s 更新时间 %s 超过一周，跳过", item.HTMLURL, item.UpdatedAt)
+					continue
+				}
+			}
+
+			// 获取文件内容
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			// 提取包含 /api/v1/client/subscribe?token= 的链接
+			links := c.extractSubscribeTokenLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新订阅 token 链接: %s", link)
+				}
+			}
+		}
+
+		// 避免速率限制
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractSubscribeTokenLinks 提取包含 /api/v1/client/subscribe?token= 的链接
+func (c *Collector) extractSubscribeTokenLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	// 提取包含 /api/v1/client/subscribe?token= 的链接
+	matches := subscribeTokenPattern.FindAllString(content, -1)
+	for _, match := range matches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		// 确保链接包含 /api/v1/client/subscribe?token=
+		if link != "" &&
+			strings.Contains(link, "/api/v1/client/subscribe?token=") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// CollectSubscribeTokenNodes 采集包含 /api/v1/client/subscribe?token= 的链接中的节点
+// 只收集有节点数据的链接，最多收集 200 个
+func (c *Collector) CollectSubscribeTokenNodes() error {
+	keywords := []string{
+		"/api/v1/client/subscribe?token=",
+		"api/v1/client/subscribe",
+		"client/subscribe?token",
+	}
+
+	// 搜索链接
+	links, err := c.SearchSubscribeTokenLinks(keywords)
+	if err != nil {
+		return fmt.Errorf("搜索订阅 token 链接失败: %v", err)
+	}
+
+	log.Printf("共找到 %d 个订阅 token 链接，开始采集节点（目标：200 个有节点数据的链接）", len(links))
+
+	// 采集节点，只统计有节点数据的链接
+	var allValidNodes []*ValidNode
+	var allParsedNodes []string
+	var validLinks []string // 记录有节点数据的链接
+	var wg sync.WaitGroup
+	resultsChan := make(chan *NodeResult, len(links))
+	var mu sync.Mutex
+	var validLinksCount int32 // 使用原子操作来统计有节点数据的链接数量
+
+	// 并发采集
+	maxConcurrency := 10
+	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
+		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
+			maxConcurrency = n
+		}
+	}
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	for _, link := range links {
+		// 如果已经收集到 200 个有节点数据的链接，停止
+		if atomic.LoadInt32(&validLinksCount) >= 200 {
+			log.Printf("已收集到 200 个有节点数据的链接，停止采集")
+			break
+		}
+
+		wg.Add(1)
+		go func(l string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			// 再次检查是否已经达到 200 个
+			if atomic.LoadInt32(&validLinksCount) >= 200 {
+				return
+			}
+
+			result := &NodeResult{Link: l}
+
+			// 获取订阅内容
+			content, err := c.FetchSubscription(l)
+			if err != nil {
+				result.Error = err
+				resultsChan <- result
+				return
+			}
+
+			// 解析节点（即使失败也继续，尝试从原始内容提取）
+			nodes, err := c.ParseNodes(content)
+			if err != nil {
+				log.Printf("订阅 token 链接 %s 解析失败: %v，尝试从原始内容提取", l, err)
+				nodes = c.extractNodesFromRawContent(content)
+				if len(nodes) == 0 {
+					result.Error = err
+					resultsChan <- result
+					return
+				}
+				log.Printf("从原始内容提取到 %d 个节点", len(nodes))
+			}
+
+			// 如果没有节点数据，不计算在内
+			if len(nodes) == 0 {
+				log.Printf("订阅 token 链接 %s 没有节点数据，跳过", l)
+				result.Error = fmt.Errorf("没有节点数据")
+				resultsChan <- result
+				return
+			}
+
+			result.Nodes = nodes
+			log.Printf("订阅 token 链接 %s 解析出 %d 个节点", l, len(nodes))
+
+			// 记录有节点数据的链接（使用原子操作）
+			mu.Lock()
+			validLinks = append(validLinks, l)
+			currentCount := int32(len(validLinks))
+			mu.Unlock()
+			atomic.StoreInt32(&validLinksCount, currentCount)
+
+			// 测试节点（不去重，让所有节点都进行测试）
+			for _, nodeLink := range nodes {
+				// 记录所有解析出的节点（用于统计）
+				mu.Lock()
+				allParsedNodes = append(allParsedNodes, nodeLink)
+				mu.Unlock()
+
+				// 默认使用 sing-box 进行真实链接测速
+				var validNode *ValidNode
+				useSingBox := os.Getenv("USE_SINGBOX")
+				if useSingBox == "false" {
+					validNode = c.TestNode(nodeLink)
+				} else {
+					validNode = c.TestNodeWithSingBox(nodeLink)
+				}
+				// 如果测试通过，添加到结果中（不去重，最后统一去重）
+				if validNode.Error == nil {
+					result.ValidNodes = append(result.ValidNodes, validNode)
+					mu.Lock()
+					allValidNodes = append(allValidNodes, validNode)
+					mu.Unlock()
+				} else {
+					// 记录测试失败的节点类型（用于统计）
+					if validNode.Type != "" {
+						result.ValidNodes = append(result.ValidNodes, validNode)
+					}
+				}
+			}
+
+			resultsChan <- result
+		}(link)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// 收集结果并统计
+	typeStats := make(map[string]int)
+	validTypeStats := make(map[string]int)
+	failedTypeStats := make(map[string]int)
+	totalNodes := 0
+	totalValidNodes := 0
+
+	for result := range resultsChan {
+		if result.Error != nil {
+			if result.Error.Error() != "没有节点数据" {
+				log.Printf("订阅 token 链接 %s 处理失败: %v", result.Link, result.Error)
+			}
+		} else {
+			totalNodes += len(result.Nodes)
+			validCount := 0
+			for _, validNode := range result.ValidNodes {
+				if validNode.Error == nil {
+					validCount++
+				}
+			}
+			totalValidNodes += validCount
+
+			// 统计所有解析出的节点类型
+			for _, nodeLink := range result.Nodes {
+				if node, err := ParseNodeLink(nodeLink); err == nil {
+					typeStats[node.Type]++
+				}
+			}
+
+			// 统计测试结果
+			for _, validNode := range result.ValidNodes {
+				if validNode.Type != "" {
+					if validNode.Error == nil {
+						validTypeStats[validNode.Type]++
+					} else {
+						failedTypeStats[validNode.Type]++
+					}
+				}
+			}
+
+			log.Printf("订阅 token 链接 %s: 共 %d 个节点，%d 个可用",
+				result.Link, len(result.Nodes), validCount)
+		}
+	}
+
+	log.Printf("订阅 token 节点采集完成，共找到 %d 个有节点数据的链接，解析 %d 个节点（去重后 %d 个），%d 个可用节点",
+		len(validLinks), totalNodes, len(allParsedNodes), len(allValidNodes))
+	if len(typeStats) > 0 {
+		log.Printf("解析出的节点类型统计:")
+		for nodeType, count := range typeStats {
+			validCount := validTypeStats[nodeType]
+			failedCount := failedTypeStats[nodeType]
+			log.Printf("  %s: 总数 %d, 可用 %d, 不可用 %d", nodeType, count, validCount, failedCount)
+		}
+	}
+
+	// 保存节点到文件
+	if err := c.saveNodesToFile(allValidNodes, "subscribe-token"); err != nil {
+		return fmt.Errorf("保存节点失败: %v", err)
+	}
+
+	return nil
+}
+
 // SaveResults 保存结果
 func (c *Collector) SaveResults(nodes []*ValidNode) error {
 	// 创建输出文件
@@ -2005,7 +2297,7 @@ func testSubscribe(subscribeURL string) {
 	var validNodes []*ValidNode
 	var failedNodes []*ValidNode
 
-	maxConcurrency := 5 // 限制并发数，避免过多资源占用
+	maxConcurrency := 10 // 限制并发数，提高速度
 	semaphore := make(chan struct{}, maxConcurrency)
 
 	for i, nodeLink := range nodes {
@@ -2085,8 +2377,8 @@ func main() {
 		return
 	}
 
-	// 设置 10 分钟超时
-	timeout := 10 * time.Minute
+	// 设置 30 分钟超时，增加采集时间
+	timeout := 30 * time.Minute
 	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
 		if d, err := time.ParseDuration(timeoutEnv); err == nil && d > 0 {
 			timeout = d
@@ -2175,6 +2467,14 @@ func main() {
 			log.Printf("iplcme 节点采集失败: %v", err)
 		} else {
 			log.Println("========== iplcme 节点采集完成 ==========")
+		}
+
+		// 第八步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集订阅 token 链接节点（优先） ==========")
+		if err := collector.CollectSubscribeTokenNodes(); err != nil {
+			log.Printf("订阅 token 节点采集失败: %v", err)
+		} else {
+			log.Println("========== 订阅 token 节点采集完成 ==========")
 		}
 
 		log.Println("========== 所有采集任务完成 ==========")
