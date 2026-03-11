@@ -14,8 +14,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 )
+
+// 全局互斥锁，用于保护端口分配
+var portAllocationMutex sync.Mutex
 
 // TestNodeWithSingBox 使用 sing-box 测试节点（真实链接测速）
 func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
@@ -463,13 +467,18 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 修改配置，添加一个测试用的 inbound（HTTP 代理）
-	// 获取一个随机端口
+	// 获取一个随机端口（加锁避免并发冲突）
+	portAllocationMutex.Lock()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		portAllocationMutex.Unlock()
 		return 0, fmt.Errorf("无法分配端口: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	listener.Close()
+	// 短暂延迟，确保端口完全释放
+	time.Sleep(10 * time.Millisecond)
+	portAllocationMutex.Unlock()
 
 	// 更新配置中的 inbound 端口
 	inbounds := config["inbounds"].([]interface{})
@@ -528,13 +537,13 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	}
 
 	// 通过代理测试真实连接
-	// 使用多个可靠的测试 URL，按优先级排序
+	// 使用更隐蔽的测试 URL，避免被节点服务商屏蔽
 	testURLs := []string{
-		"http://cp.cloudflare.com",           // Cloudflare 连通性检测，返回简单文本
-		"http://www.cloudflare.com",          // Cloudflare，稳定
+		"http://www.apple.com",               // Apple 官网
+		"http://www.microsoft.com",           // 微软官网
+		"http://www.amazon.com",              // 亚马逊
+		"http://cp.cloudflare.com",           // Cloudflare 连通性检测
 		"http://www.google.com/generate_204", // Google 204 响应
-		"http://1.1.1.1",                     // Cloudflare DNS，简单
-		"http://www.baidu.com",               // 百度，国内可访问
 	}
 
 	// 从环境变量读取测试 URL（如果设置了）

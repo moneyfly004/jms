@@ -2493,7 +2493,7 @@ func testSubscribe(subscribeURL string) {
 	var validNodes []*ValidNode
 	var failedNodes []*ValidNode
 
-	maxConcurrency := 10 // 限制并发数，提高速度
+	maxConcurrency := 3 // 降低并发数，避免节点服务商限流
 	semaphore := make(chan struct{}, maxConcurrency)
 
 	for i, nodeLink := range nodes {
