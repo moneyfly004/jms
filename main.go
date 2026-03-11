@@ -51,6 +51,8 @@ var (
 	nn8qozmuLinkPattern = regexp.MustCompile(`https?://[^\s"']*nn8qozmu\.top[^\s"']*`)
 	// 匹配包含 /api/v1/client/subscribe?token= 的链接的正则表达式
 	subscribeTokenPattern = regexp.MustCompile(`https?://[^\s"']*/api/v1/client/subscribe\?token=[^\s"']*`)
+	// 匹配 update.glados-config.com 链接的正则表达式（优先）
+	gladosLinkPattern = regexp.MustCompile(`https?://update\.glados-config\.com[^\s"']*`)
 )
 
 // GitHubSearchResult GitHub 搜索结果
@@ -739,6 +741,47 @@ func (c *Collector) SearchNn8qozmuLinks(keywords []string) ([]string, error) {
 	return allLinks, nil
 }
 
+// SearchGladosLinks 搜索 update.glados-config.com 链接
+func (c *Collector) SearchGladosLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 GlaDOS 关键词: %s", keyword)
+
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		for _, item := range results.Items {
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			links := c.extractGladosLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 GlaDOS 链接: %s", link)
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
 // extractNn8qozmuLinks 提取 nn8qozmu 链接
 func (c *Collector) extractNn8qozmuLinks(content string) []string {
 	var links []string
@@ -752,6 +795,28 @@ func (c *Collector) extractNn8qozmuLinks(content string) []string {
 
 		if link != "" &&
 			strings.Contains(link, "nn8qozmu.top") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// extractGladosLinks 提取 update.glados-config.com 链接
+func (c *Collector) extractGladosLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	matches := gladosLinkPattern.FindAllString(content, -1)
+	for _, match := range matches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		if link != "" &&
+			strings.Contains(link, "update.glados-config.com") &&
 			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
@@ -2028,6 +2093,15 @@ func (c *Collector) CollectNn8qozmuNodes() error {
 	return c.collectNodesGeneric(c.SearchNn8qozmuLinks, "nn8qozmu", keywords)
 }
 
+// CollectGladosNodes 采集 update.glados-config.com 链接中的节点
+func (c *Collector) CollectGladosNodes() error {
+	keywords := []string{
+		"update.glados-config.com",
+		"glados-config.com",
+	}
+	return c.collectNodesGeneric(c.SearchGladosLinks, "GlaDOS", keywords)
+}
+
 // SearchSubscribeTokenLinks 搜索包含 /api/v1/client/subscribe?token= 的链接
 // 只返回三个月内更新的仓库中的链接
 func (c *Collector) SearchSubscribeTokenLinks(keywords []string) ([]string, error) {
@@ -2623,7 +2697,15 @@ func main() {
 			log.Println("========== JMS 节点采集完成 ==========")
 		}
 
-		// 第二步（优先）：采集 m7r52rosihxm 链接中的节点（追加到 nodes.txt）
+		// 第二步（最优先）：采集 GlaDOS 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 GlaDOS 链接节点（最优先） ==========")
+		if err := collector.CollectGladosNodes(); err != nil {
+			log.Printf("GlaDOS 节点采集失败: %v", err)
+		} else {
+			log.Println("========== GlaDOS 节点采集完成 ==========")
+		}
+
+		// 第三步（优先）：采集 m7r52rosihxm 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 m7r52rosihxm 链接节点（优先） ==========")
 		if err := collector.CollectM7r52rosihxmNodes(); err != nil {
 			log.Printf("m7r52rosihxm 节点采集失败: %v", err)
@@ -2631,7 +2713,7 @@ func main() {
 			log.Println("========== m7r52rosihxm 节点采集完成 ==========")
 		}
 
-		// 第三步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
+		// 第四步（优先）：采集建森电器链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集建森电器链接节点（优先） ==========")
 		if err := collector.CollectJiansendianqiNodes(); err != nil {
 			log.Printf("建森电器节点采集失败: %v", err)
@@ -2639,7 +2721,7 @@ func main() {
 			log.Println("========== 建森电器节点采集完成 ==========")
 		}
 
-		// 第四步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
+		// 第五步（优先）：采集 ninjasub 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 ninjasub 链接节点（优先） ==========")
 		if err := collector.CollectNinjasubNodes(); err != nil {
 			log.Printf("ninjasub 节点采集失败: %v", err)
@@ -2647,7 +2729,7 @@ func main() {
 			log.Println("========== ninjasub 节点采集完成 ==========")
 		}
 
-		// 第五步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
+		// 第六步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 nginx24zfd 链接节点（优先） ==========")
 		if err := collector.CollectNginx24zfdNodes(); err != nil {
 			log.Printf("nginx24zfd 节点采集失败: %v", err)
@@ -2655,7 +2737,7 @@ func main() {
 			log.Println("========== nginx24zfd 节点采集完成 ==========")
 		}
 
-		// 第六步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
+		// 第七步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 iplcme 链接节点（优先） ==========")
 		if err := collector.CollectIplcmeNodes(); err != nil {
 			log.Printf("iplcme 节点采集失败: %v", err)
@@ -2663,7 +2745,7 @@ func main() {
 			log.Println("========== iplcme 节点采集完成 ==========")
 		}
 
-		// 第七步：采集 smallstrawberry 链接中的节点（追加到 nodes.txt）
+		// 第八步：采集 smallstrawberry 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 smallstrawberry 链接节点 ==========")
 		if err := collector.CollectSmallstrawberryNodes(); err != nil {
 			log.Printf("smallstrawberry 节点采集失败: %v", err)
@@ -2671,7 +2753,7 @@ func main() {
 			log.Println("========== smallstrawberry 节点采集完成 ==========")
 		}
 
-		// 第八步：采集 ssidwork 链接中的节点（追加到 nodes.txt）
+		// 第九步：采集 ssidwork 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 ssidwork 链接节点 ==========")
 		if err := collector.CollectSsidworkNodes(); err != nil {
 			log.Printf("ssidwork 节点采集失败: %v", err)
@@ -2679,7 +2761,7 @@ func main() {
 			log.Println("========== ssidwork 节点采集完成 ==========")
 		}
 
-		// 第九步：采集 fcsubcn 链接中的节点（追加到 nodes.txt）
+		// 第十步：采集 fcsubcn 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 fcsubcn 链接节点 ==========")
 		if err := collector.CollectFcsubcnNodes(); err != nil {
 			log.Printf("fcsubcn 节点采集失败: %v", err)
@@ -2687,7 +2769,7 @@ func main() {
 			log.Println("========== fcsubcn 节点采集完成 ==========")
 		}
 
-		// 第十步：采集 nn8qozmu 链接中的节点（追加到 nodes.txt）
+		// 第十一步：采集 nn8qozmu 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 nn8qozmu 链接节点 ==========")
 		if err := collector.CollectNn8qozmuNodes(); err != nil {
 			log.Printf("nn8qozmu 节点采集失败: %v", err)
@@ -2695,7 +2777,7 @@ func main() {
 			log.Println("========== nn8qozmu 节点采集完成 ==========")
 		}
 
-		// 第十一步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
+		// 第十二步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集订阅 token 链接节点（优先） ==========")
 		if err := collector.CollectSubscribeTokenNodes(); err != nil {
 			log.Printf("订阅 token 节点采集失败: %v", err)
