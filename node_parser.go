@@ -20,6 +20,7 @@ type ProxyNode struct {
 	Cipher   string
 	Network  string
 	TLS      bool
+	Insecure bool // 跳过 TLS 证书验证
 	UDP      bool
 	// SSR 相关
 	Protocol      string // SSR 协议
@@ -245,6 +246,11 @@ func parseVLESS(link string) (*ProxyNode, error) {
 		node.TLS = true
 	}
 
+	// Insecure 配置
+	if query.Get("insecure") == "1" || query.Get("allowInsecure") == "1" || query.Get("allow_insecure") == "1" {
+		node.Insecure = true
+	}
+
 	// Flow 配置
 	flow := query.Get("flow")
 	if flow != "" {
@@ -341,6 +347,11 @@ func parseTrojan(link string) (*ProxyNode, error) {
 	alpn := query.Get("alpn")
 	if alpn != "" {
 		node.ALPN = alpn
+	}
+
+	// Insecure 配置
+	if query.Get("insecure") == "1" || query.Get("allowInsecure") == "1" || query.Get("allow_insecure") == "1" {
+		node.Insecure = true
 	}
 
 	return node, nil

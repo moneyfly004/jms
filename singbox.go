@@ -220,6 +220,9 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			if node.ALPN != "" {
 				tlsConfig["alpn"] = []string{node.ALPN}
 			}
+			if node.Insecure {
+				tlsConfig["insecure"] = true
+			}
 			outbound["tls"] = tlsConfig
 		}
 	case "vless":
@@ -299,6 +302,9 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 				}
 				tlsConfig["reality"] = realityConfig
 			}
+			if node.Insecure {
+				tlsConfig["insecure"] = true
+			}
 			outbound["tls"] = tlsConfig
 		}
 	case "trojan":
@@ -317,6 +323,9 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			}
 			if node.ALPN != "" {
 				tlsConfig["alpn"] = []string{node.ALPN}
+			}
+			if node.Insecure {
+				tlsConfig["insecure"] = true
 			}
 			outbound["tls"] = tlsConfig
 		}
