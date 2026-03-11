@@ -37,8 +37,6 @@ var (
 	jiansendianqiLinkPattern = regexp.MustCompile(`https?://[^\s"']*建森电器\.com[^\s"']*`)
 	// 匹配 ninjasub 链接的正则表达式
 	ninjasubLinkPattern = regexp.MustCompile(`https?://[^\s"']*ninjasub\.com/link[^\s"']*`)
-	// 匹配 xueshan 链接的正则表达式
-	xueshanLinkPattern = regexp.MustCompile(`https?://[^\s"']*xueshan\.shop/s/[^\s"']*`)
 	// 匹配 nginx24zfd 链接的正则表达式
 	nginx24zfdLinkPattern = regexp.MustCompile(`https?://[^\s"']*nginx24zfd\.xyz/link/[^\s"']*`)
 	// 匹配 iplcme 链接的正则表达式
@@ -369,75 +367,7 @@ func (c *Collector) extractNinjasubLinks(content string) []string {
 	return links
 }
 
-// SearchXueshanLinks 搜索 xueshan 链接（类似 SearchGhelperLinks，但只提取 xueshan 链接）
-func (c *Collector) SearchXueshanLinks(keywords []string) ([]string, error) {
-	var allLinks []string
-	seenLinks := make(map[string]bool)
 
-	for _, keyword := range keywords {
-		log.Printf("正在搜索 xueshan 关键词: %s", keyword)
-
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
-
-		var results GitHubSearchResult
-		if err := c.makeRequest(searchURL, &results); err != nil {
-			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
-			continue
-		}
-
-		log.Printf("找到 %d 个结果", results.TotalCount)
-
-		// 处理每个结果
-		for _, item := range results.Items {
-			// 获取文件内容
-			fileContent, err := c.getFileContent(item.APIURL)
-			if err != nil {
-				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
-				continue
-			}
-
-			// 只提取 xueshan 链接
-			links := c.extractXueshanLinks(fileContent)
-			for _, link := range links {
-				if !seenLinks[link] {
-					seenLinks[link] = true
-					allLinks = append(allLinks, link)
-					log.Printf("发现新 xueshan 链接: %s", link)
-				}
-			}
-		}
-
-		// 避免速率限制
-		time.Sleep(2 * time.Second)
-	}
-
-	return allLinks, nil
-}
-
-// extractXueshanLinks 提取 xueshan 链接
-func (c *Collector) extractXueshanLinks(content string) []string {
-	var links []string
-	seenLinks := make(map[string]bool)
-
-	// 提取 xueshan 链接（特征：xueshan.shop/s/）
-	xueshanMatches := xueshanLinkPattern.FindAllString(content, -1)
-	for _, match := range xueshanMatches {
-		link := strings.TrimSpace(match)
-		link = strings.TrimRight(link, ".,;!?)")
-		link = strings.TrimRight(link, "\"')")
-
-		// 只保留包含 xueshan.shop/s/ 的链接
-		if link != "" &&
-			strings.Contains(link, "xueshan.shop/s/") &&
-			!seenLinks[link] {
-			seenLinks[link] = true
-			links = append(links, link)
-		}
-	}
-
-	return links
-}
 
 // SearchNginx24zfdLinks 搜索 nginx24zfd 链接（类似 SearchGhelperLinks，但只提取 nginx24zfd 链接）
 func (c *Collector) SearchNginx24zfdLinks(keywords []string) ([]string, error) {
@@ -2048,14 +1978,6 @@ func (c *Collector) CollectNinjasubNodes() error {
 	return c.collectNodesGeneric(c.SearchNinjasubLinks, "ninjasub", keywords)
 }
 
-// CollectXueshanNodes 采集 xueshan 链接中的节点，保存到 nodes.txt
-func (c *Collector) CollectXueshanNodes() error {
-	keywords := []string{
-		"xueshan.shop/s",
-		"xueshan.shop/s/",
-	}
-	return c.collectNodesGeneric(c.SearchXueshanLinks, "xueshan", keywords)
-}
 
 // CollectNginx24zfdNodes 采集 nginx24zfd 链接中的节点，保存到 nodes.txt
 func (c *Collector) CollectNginx24zfdNodes() error {
@@ -2725,15 +2647,7 @@ func main() {
 			log.Println("========== ninjasub 节点采集完成 ==========")
 		}
 
-		// 第五步（优先）：采集 xueshan 链接中的节点（追加到 nodes.txt）
-		log.Println("========== 开始采集 xueshan 链接节点（优先） ==========")
-		if err := collector.CollectXueshanNodes(); err != nil {
-			log.Printf("xueshan 节点采集失败: %v", err)
-		} else {
-			log.Println("========== xueshan 节点采集完成 ==========")
-		}
-
-		// 第六步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
+		// 第五步（优先）：采集 nginx24zfd 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 nginx24zfd 链接节点（优先） ==========")
 		if err := collector.CollectNginx24zfdNodes(); err != nil {
 			log.Printf("nginx24zfd 节点采集失败: %v", err)
@@ -2741,7 +2655,7 @@ func main() {
 			log.Println("========== nginx24zfd 节点采集完成 ==========")
 		}
 
-		// 第七步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
+		// 第六步（优先）：采集 iplcme 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 iplcme 链接节点（优先） ==========")
 		if err := collector.CollectIplcmeNodes(); err != nil {
 			log.Printf("iplcme 节点采集失败: %v", err)
@@ -2749,7 +2663,7 @@ func main() {
 			log.Println("========== iplcme 节点采集完成 ==========")
 		}
 
-		// 第八步：采集 smallstrawberry 链接中的节点（追加到 nodes.txt）
+		// 第七步：采集 smallstrawberry 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 smallstrawberry 链接节点 ==========")
 		if err := collector.CollectSmallstrawberryNodes(); err != nil {
 			log.Printf("smallstrawberry 节点采集失败: %v", err)
@@ -2757,7 +2671,7 @@ func main() {
 			log.Println("========== smallstrawberry 节点采集完成 ==========")
 		}
 
-		// 第九步：采集 ssidwork 链接中的节点（追加到 nodes.txt）
+		// 第八步：采集 ssidwork 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 ssidwork 链接节点 ==========")
 		if err := collector.CollectSsidworkNodes(); err != nil {
 			log.Printf("ssidwork 节点采集失败: %v", err)
@@ -2765,7 +2679,7 @@ func main() {
 			log.Println("========== ssidwork 节点采集完成 ==========")
 		}
 
-		// 第十步：采集 fcsubcn 链接中的节点（追加到 nodes.txt）
+		// 第九步：采集 fcsubcn 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 fcsubcn 链接节点 ==========")
 		if err := collector.CollectFcsubcnNodes(); err != nil {
 			log.Printf("fcsubcn 节点采集失败: %v", err)
@@ -2773,7 +2687,7 @@ func main() {
 			log.Println("========== fcsubcn 节点采集完成 ==========")
 		}
 
-		// 第十一步：采集 nn8qozmu 链接中的节点（追加到 nodes.txt）
+		// 第十步：采集 nn8qozmu 链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集 nn8qozmu 链接节点 ==========")
 		if err := collector.CollectNn8qozmuNodes(); err != nil {
 			log.Printf("nn8qozmu 节点采集失败: %v", err)
@@ -2781,7 +2695,7 @@ func main() {
 			log.Println("========== nn8qozmu 节点采集完成 ==========")
 		}
 
-		// 第十二步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
+		// 第十一步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集订阅 token 链接节点（优先） ==========")
 		if err := collector.CollectSubscribeTokenNodes(); err != nil {
 			log.Printf("订阅 token 节点采集失败: %v", err)

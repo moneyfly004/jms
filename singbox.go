@@ -95,13 +95,14 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	// 使用 sing-box 测试延迟
 	latency, err := c.testLatencyWithSingBox(singBoxPath, configFile)
 	if err != nil {
-		// sing-box 测试失败，回退到 TCP 测试
+		// sing-box 测试失败，直接标记为不可用（不回退到 TCP）
 		nodeLinkShort := nodeLink
 		if len(nodeLinkShort) > 50 {
 			nodeLinkShort = nodeLinkShort[:50]
 		}
-		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v，回退到 TCP 测试", nodeLinkShort, err)
-		return c.TestNode(nodeLink)
+		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v", nodeLinkShort, err)
+		result.Error = fmt.Errorf("代理测试失败: %v", err)
+		return result
 	}
 
 	result.Latency = latency
@@ -477,8 +478,8 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		return 0, err
 	}
 
-	// 启动 sing-box 进行真实连接测试（减少超时时间，提高速度）
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// 启动 sing-box 进行真实连接测试
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd = exec.CommandContext(ctx, singBoxPath, "run", "-c", configFile)
@@ -498,9 +499,9 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 		}
 	}()
 
-	// 等待 sing-box 启动（减少等待时间，提高速度）
-	maxWait := 3 * time.Second             // 减少到 3 秒
-	waitInterval := 100 * time.Millisecond // 减少间隔时间
+	// 等待 sing-box 启动
+	maxWait := 5 * time.Second              // 增加到 5 秒
+	waitInterval := 100 * time.Millisecond
 	waited := time.Duration(0)
 	for waited < maxWait {
 		// 检查端口是否已监听
@@ -536,7 +537,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 
 	// 从环境变量读取超时时间
 	timeoutStr := os.Getenv("TEST_TIMEOUT")
-	timeout := 8 * time.Second // 默认 8 秒，提高速度
+	timeout := 15 * time.Second // 增加到 15 秒
 	if timeoutStr != "" {
 		if seconds, err := time.ParseDuration(timeoutStr + "s"); err == nil && seconds > 0 {
 			timeout = seconds
