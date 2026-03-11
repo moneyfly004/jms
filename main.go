@@ -42,6 +42,14 @@ var (
 	nginx24zfdLinkPattern = regexp.MustCompile(`https?://[^\s"']*nginx24zfd\.xyz/link/[^\s"']*`)
 	// 匹配 iplcme 链接的正则表达式
 	iplcmeLinkPattern = regexp.MustCompile(`https?://[^\s"']*iplcme\.com[^\s"']*`)
+	// 匹配 smallstrawberry 链接的正则表达式
+	smallstrawberryLinkPattern = regexp.MustCompile(`https?://[^\s"']*smallstrawberry\.com[^\s"']*`)
+	// 匹配 ssidwork 链接的正则表达式
+	ssidworkLinkPattern = regexp.MustCompile(`https?://[^\s"']*ssidwork\.com[^\s"']*`)
+	// 匹配 fcsubcn 链接的正则表达式
+	fcsubcnLinkPattern = regexp.MustCompile(`https?://[^\s"']*fcsubcn\.cc[^\s"']*`)
+	// 匹配 nn8qozmu 链接的正则表达式
+	nn8qozmuLinkPattern = regexp.MustCompile(`https?://[^\s"']*nn8qozmu\.top[^\s"']*`)
 	// 匹配包含 /api/v1/client/subscribe?token= 的链接的正则表达式
 	subscribeTokenPattern = regexp.MustCompile(`https?://[^\s"']*/api/v1/client/subscribe\?token=[^\s"']*`)
 )
@@ -562,6 +570,258 @@ func (c *Collector) extractIplcmeLinks(content string) []string {
 		// 只保留包含 iplcme.com 的链接
 		if link != "" &&
 			strings.Contains(link, "iplcme.com") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchSmallstrawberryLinks 搜索 smallstrawberry 链接
+func (c *Collector) SearchSmallstrawberryLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 smallstrawberry 关键词: %s", keyword)
+
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		for _, item := range results.Items {
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			links := c.extractSmallstrawberryLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 smallstrawberry 链接: %s", link)
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractSmallstrawberryLinks 提取 smallstrawberry 链接
+func (c *Collector) extractSmallstrawberryLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	matches := smallstrawberryLinkPattern.FindAllString(content, -1)
+	for _, match := range matches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		if link != "" &&
+			strings.Contains(link, "smallstrawberry.com") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchSsidworkLinks 搜索 ssidwork 链接
+func (c *Collector) SearchSsidworkLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 ssidwork 关键词: %s", keyword)
+
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		for _, item := range results.Items {
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			links := c.extractSsidworkLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 ssidwork 链接: %s", link)
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractSsidworkLinks 提取 ssidwork 链接
+func (c *Collector) extractSsidworkLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	matches := ssidworkLinkPattern.FindAllString(content, -1)
+	for _, match := range matches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		if link != "" &&
+			strings.Contains(link, "ssidwork.com") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchFcsubcnLinks 搜索 fcsubcn 链接
+func (c *Collector) SearchFcsubcnLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 fcsubcn 关键词: %s", keyword)
+
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		for _, item := range results.Items {
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			links := c.extractFcsubcnLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 fcsubcn 链接: %s", link)
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractFcsubcnLinks 提取 fcsubcn 链接
+func (c *Collector) extractFcsubcnLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	matches := fcsubcnLinkPattern.FindAllString(content, -1)
+	for _, match := range matches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		if link != "" &&
+			strings.Contains(link, "fcsubcn.cc") &&
+			!seenLinks[link] {
+			seenLinks[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links
+}
+
+// SearchNn8qozmuLinks 搜索 nn8qozmu 链接
+func (c *Collector) SearchNn8qozmuLinks(keywords []string) ([]string, error) {
+	var allLinks []string
+	seenLinks := make(map[string]bool)
+
+	for _, keyword := range keywords {
+		log.Printf("正在搜索 nn8qozmu 关键词: %s", keyword)
+
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索关键词 %s 失败: %v", keyword, err)
+			continue
+		}
+
+		log.Printf("找到 %d 个结果", results.TotalCount)
+
+		for _, item := range results.Items {
+			fileContent, err := c.getFileContent(item.APIURL)
+			if err != nil {
+				log.Printf("获取文件内容失败 %s: %v", item.HTMLURL, err)
+				continue
+			}
+
+			links := c.extractNn8qozmuLinks(fileContent)
+			for _, link := range links {
+				if !seenLinks[link] {
+					seenLinks[link] = true
+					allLinks = append(allLinks, link)
+					log.Printf("发现新 nn8qozmu 链接: %s", link)
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return allLinks, nil
+}
+
+// extractNn8qozmuLinks 提取 nn8qozmu 链接
+func (c *Collector) extractNn8qozmuLinks(content string) []string {
+	var links []string
+	seenLinks := make(map[string]bool)
+
+	matches := nn8qozmuLinkPattern.FindAllString(content, -1)
+	for _, match := range matches {
+		link := strings.TrimSpace(match)
+		link = strings.TrimRight(link, ".,;!?)")
+		link = strings.TrimRight(link, "\"')")
+
+		if link != "" &&
+			strings.Contains(link, "nn8qozmu.top") &&
 			!seenLinks[link] {
 			seenLinks[link] = true
 			links = append(links, link)
@@ -1814,6 +2074,38 @@ func (c *Collector) CollectIplcmeNodes() error {
 	return c.collectNodesGeneric(c.SearchIplcmeLinks, "iplcme", keywords)
 }
 
+// CollectSmallstrawberryNodes 采集 smallstrawberry 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectSmallstrawberryNodes() error {
+	keywords := []string{
+		"smallstrawberry.com",
+	}
+	return c.collectNodesGeneric(c.SearchSmallstrawberryLinks, "smallstrawberry", keywords)
+}
+
+// CollectSsidworkNodes 采集 ssidwork 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectSsidworkNodes() error {
+	keywords := []string{
+		"ssidwork.com",
+	}
+	return c.collectNodesGeneric(c.SearchSsidworkLinks, "ssidwork", keywords)
+}
+
+// CollectFcsubcnNodes 采集 fcsubcn 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectFcsubcnNodes() error {
+	keywords := []string{
+		"fcsubcn.cc",
+	}
+	return c.collectNodesGeneric(c.SearchFcsubcnLinks, "fcsubcn", keywords)
+}
+
+// CollectNn8qozmuNodes 采集 nn8qozmu 链接中的节点，保存到 nodes.txt
+func (c *Collector) CollectNn8qozmuNodes() error {
+	keywords := []string{
+		"nn8qozmu.top",
+	}
+	return c.collectNodesGeneric(c.SearchNn8qozmuLinks, "nn8qozmu", keywords)
+}
+
 // SearchSubscribeTokenLinks 搜索包含 /api/v1/client/subscribe?token= 的链接
 // 只返回一周内更新的文件中的链接
 func (c *Collector) SearchSubscribeTokenLinks(keywords []string) ([]string, error) {
@@ -2469,7 +2761,39 @@ func main() {
 			log.Println("========== iplcme 节点采集完成 ==========")
 		}
 
-		// 第八步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
+		// 第八步：采集 smallstrawberry 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 smallstrawberry 链接节点 ==========")
+		if err := collector.CollectSmallstrawberryNodes(); err != nil {
+			log.Printf("smallstrawberry 节点采集失败: %v", err)
+		} else {
+			log.Println("========== smallstrawberry 节点采集完成 ==========")
+		}
+
+		// 第九步：采集 ssidwork 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 ssidwork 链接节点 ==========")
+		if err := collector.CollectSsidworkNodes(); err != nil {
+			log.Printf("ssidwork 节点采集失败: %v", err)
+		} else {
+			log.Println("========== ssidwork 节点采集完成 ==========")
+		}
+
+		// 第十步：采集 fcsubcn 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 fcsubcn 链接节点 ==========")
+		if err := collector.CollectFcsubcnNodes(); err != nil {
+			log.Printf("fcsubcn 节点采集失败: %v", err)
+		} else {
+			log.Println("========== fcsubcn 节点采集完成 ==========")
+		}
+
+		// 第十一步：采集 nn8qozmu 链接中的节点（追加到 nodes.txt）
+		log.Println("========== 开始采集 nn8qozmu 链接节点 ==========")
+		if err := collector.CollectNn8qozmuNodes(); err != nil {
+			log.Printf("nn8qozmu 节点采集失败: %v", err)
+		} else {
+			log.Println("========== nn8qozmu 节点采集完成 ==========")
+		}
+
+		// 第十二步（优先）：采集包含 /api/v1/client/subscribe?token= 的链接中的节点（追加到 nodes.txt）
 		log.Println("========== 开始采集订阅 token 链接节点（优先） ==========")
 		if err := collector.CollectSubscribeTokenNodes(); err != nil {
 			log.Printf("订阅 token 节点采集失败: %v", err)
