@@ -95,14 +95,13 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	// 使用 sing-box 测试延迟
 	latency, err := c.testLatencyWithSingBox(singBoxPath, configFile)
 	if err != nil {
-		// 记录详细错误信息用于调试
+		// sing-box 测试失败，回退到 TCP 测试
 		nodeLinkShort := nodeLink
 		if len(nodeLinkShort) > 50 {
 			nodeLinkShort = nodeLinkShort[:50]
 		}
-		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v", nodeLinkShort, err)
-		result.Error = fmt.Errorf("sing-box 测试失败: %v", err)
-		return result
+		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v，回退到 TCP 测试", nodeLinkShort, err)
+		return c.TestNode(nodeLink)
 	}
 
 	result.Latency = latency
@@ -111,7 +110,11 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	if os.Getenv("TEST_SPEED") == "true" {
 		speed, err := c.testSpeedWithSingBox(singBoxPath, configFile)
 		if err == nil {
-			log.Printf("节点 %s 速度: %.2f MB/s", nodeLink[:50], speed)
+			nodeLinkShort := nodeLink
+			if len(nodeLinkShort) > 50 {
+				nodeLinkShort = nodeLinkShort[:50]
+			}
+			log.Printf("节点 %s 速度: %.2f MB/s", nodeLinkShort, speed)
 		}
 	}
 
@@ -268,8 +271,22 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 
 		// TLS/Reality 配置
 		if node.TLS {
+			tlsConfig := map[string]interface{}{
+				"enabled": true,
+			}
+			if node.SNI != "" {
+				tlsConfig["server_name"] = node.SNI
+			}
+			if node.ALPN != "" {
+				tlsConfig["alpn"] = []string{node.ALPN}
+			}
+			if node.Fingerprint != "" {
+				tlsConfig["utls"] = map[string]interface{}{
+					"enabled":     true,
+					"fingerprint": node.Fingerprint,
+				}
+			}
 			if node.Security == "reality" {
-				// Reality 配置
 				realityConfig := map[string]interface{}{
 					"enabled": true,
 				}
@@ -279,29 +296,9 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 				if node.RealityShortID != "" {
 					realityConfig["short_id"] = node.RealityShortID
 				}
-				if node.SNI != "" {
-					realityConfig["server_name"] = node.SNI
-				}
-				if node.Fingerprint != "" {
-					realityConfig["fingerprint"] = node.Fingerprint
-				}
-				outbound["reality"] = realityConfig
-			} else {
-				// 标准 TLS 配置
-				tlsConfig := map[string]interface{}{
-					"enabled": true,
-				}
-				if node.SNI != "" {
-					tlsConfig["server_name"] = node.SNI
-				}
-				if node.ALPN != "" {
-					tlsConfig["alpn"] = []string{node.ALPN}
-				}
-				if node.Fingerprint != "" {
-					tlsConfig["fingerprint"] = node.Fingerprint
-				}
-				outbound["tls"] = tlsConfig
+				tlsConfig["reality"] = realityConfig
 			}
+			outbound["tls"] = tlsConfig
 		}
 	case "trojan":
 		outbound = map[string]interface{}{
@@ -374,6 +371,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 		"inbounds": []map[string]interface{}{
 			{
 				"type":        "mixed",
+				"tag":         "mixed-in",
 				"listen":      "127.0.0.1",
 				"listen_port": 0, // 自动分配端口
 			},
@@ -382,11 +380,6 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 			outbound,
 		},
 		"route": map[string]interface{}{
-			"rules": []map[string]interface{}{
-				{
-					"outbound": "proxy",
-				},
-			},
 			"final": "proxy",
 		},
 	}
@@ -542,9 +535,12 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   timeout,
-		// 禁用自动重定向，手动处理以确保通过代理
+		// 允许最多 3 次重定向，确保通过代理完成
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
 		},
 	}
 
