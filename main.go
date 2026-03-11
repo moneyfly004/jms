@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -2650,6 +2651,12 @@ func main() {
 		return
 	}
 
+	// 检查是否是测试节点模式
+	if len(os.Args) > 1 && os.Args[1] == "test-nodes" {
+		testNodesFromFile()
+		return
+	}
+
 	// 设置 30 分钟超时，增加采集时间
 	timeout := 30 * time.Minute
 	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
@@ -2794,4 +2801,60 @@ func main() {
 			log.Printf("⏰ 采集超时（%v），停止采集", timeout)
 		}
 	}
+}
+
+func testNodesFromFile() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法: go run . test-nodes <节点文件>")
+		return
+	}
+
+	file, err := os.Open(os.Args[2])
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	var nodes []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			nodes = append(nodes, line)
+		}
+	}
+
+	collector := NewCollector("")
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	results := make(map[int]*ValidNode)
+
+	for i, nodeLink := range nodes {
+		wg.Add(1)
+		go func(index int, link string) {
+			defer wg.Done()
+
+			validNode := collector.TestNodeWithSingBox(link)
+
+			mu.Lock()
+			results[index] = validNode
+			mu.Unlock()
+		}(i, nodeLink)
+	}
+
+	wg.Wait()
+
+	fmt.Println("\n========== 测试结果 ==========")
+	validCount := 0
+	for i := 0; i < len(nodes); i++ {
+		node := results[i]
+		if node.Error == nil {
+			validCount++
+			fmt.Printf("✅ [%d] 可用 - 类型: %s, 延迟: %v\n", i+1, node.Type, node.Latency)
+		} else {
+			fmt.Printf("❌ [%d] 不可用 - 类型: %s, 错误: %v\n", i+1, node.Type, node.Error)
+		}
+	}
+	fmt.Printf("\n总计: %d 个节点, %d 个可用, %d 个不可用\n", len(nodes), validCount, len(nodes)-validCount)
 }

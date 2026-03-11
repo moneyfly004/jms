@@ -75,8 +75,10 @@ func ParseNodeLink(link string) (*ProxyNode, error) {
 		return parseTrojan(link)
 	} else if strings.HasPrefix(link, "ssr://") {
 		return parseSSR(link)
-	} else if strings.HasPrefix(link, "hysteria://") || strings.HasPrefix(link, "hy2://") {
+	} else if strings.HasPrefix(link, "hysteria://") {
 		return parseHysteria(link)
+	} else if strings.HasPrefix(link, "hysteria2://") || strings.HasPrefix(link, "hy2://") {
+		return parseHysteria2(link)
 	} else if strings.HasPrefix(link, "wireguard://") || strings.HasPrefix(link, "wg://") {
 		return parseWireGuard(link)
 	} else if strings.HasPrefix(link, "tuic://") {
@@ -740,6 +742,56 @@ func parseHysteria(link string) (*ProxyNode, error) {
 		ObfsPassword: obfsPassword,
 		UDP:          true,
 	}, nil
+}
+
+// parseHysteria2 解析 Hysteria2 链接
+func parseHysteria2(link string) (*ProxyNode, error) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+
+	// Hysteria2 格式: hysteria2://password@host:port?params
+	password := parsed.User.Username()
+	if password == "" {
+		return nil, fmt.Errorf("缺少密码")
+	}
+
+	query := parsed.Query()
+	port := getPort(parsed)
+	name := getFragment(parsed, fmt.Sprintf("Hysteria2-%s:%d", parsed.Hostname(), port))
+
+	node := &ProxyNode{
+		Name:     name,
+		Type:     "hysteria2",
+		Server:   parsed.Hostname(),
+		Port:     port,
+		Password: password,
+		UDP:      true,
+	}
+
+	// SNI
+	if sni := query.Get("sni"); sni != "" {
+		node.SNI = sni
+	}
+
+	// ALPN
+	if alpn := query.Get("alpn"); alpn != "" {
+		node.ALPN = alpn
+	}
+
+	// Obfs (混淆)
+	if obfs := query.Get("obfs"); obfs != "" {
+		node.ObfsPassword = obfs
+	}
+
+	// insecure/allowInsecure
+	insecure := query.Get("insecure") == "1" || query.Get("allowInsecure") == "1"
+	if !insecure {
+		node.TLS = true
+	}
+
+	return node, nil
 }
 
 // parseWireGuard 解析 WireGuard 链接

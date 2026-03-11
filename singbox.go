@@ -331,6 +331,35 @@ func (c *Collector) createSingBoxConfig(nodeLink string) (string, error) {
 		if node.ObfsPassword != "" {
 			outbound["obfs"] = node.ObfsPassword
 		}
+	case "hysteria2":
+		outbound = map[string]interface{}{
+			"type":        "hysteria2",
+			"server":      node.Server,
+			"server_port": node.Port,
+			"password":    node.Password,
+		}
+		// TLS 配置
+		tlsConfig := map[string]interface{}{
+			"enabled": true,
+		}
+		if node.SNI != "" {
+			tlsConfig["server_name"] = node.SNI
+		}
+		if node.ALPN != "" {
+			tlsConfig["alpn"] = []string{node.ALPN}
+		}
+		// insecure 参数
+		if !node.TLS {
+			tlsConfig["insecure"] = true
+		}
+		outbound["tls"] = tlsConfig
+		// Obfs 混淆
+		if node.ObfsPassword != "" {
+			outbound["obfs"] = map[string]interface{}{
+				"type":     "salamander",
+				"password": node.ObfsPassword,
+			}
+		}
 	case "wireguard":
 		outbound = map[string]interface{}{
 			"type":        "wireguard",
