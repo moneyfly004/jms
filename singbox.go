@@ -498,11 +498,11 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 	// 通过代理测试真实连接
 	// 使用多个可靠的测试 URL，按优先级排序
 	testURLs := []string{
-		"http://www.google.com/generate_204", // Google 204 响应，最快
+		"http://cp.cloudflare.com",           // Cloudflare 连通性检测，返回简单文本
 		"http://www.cloudflare.com",          // Cloudflare，稳定
+		"http://www.google.com/generate_204", // Google 204 响应
 		"http://1.1.1.1",                     // Cloudflare DNS，简单
 		"http://www.baidu.com",               // 百度，国内可访问
-		"http://www.microsoft.com",           // 微软，备用
 	}
 
 	// 从环境变量读取测试 URL（如果设置了）
@@ -568,7 +568,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 
 	// 尝试多个测试 URL，每个 URL 测试多次
 	// 优化：只测试第一个 URL，如果成功就返回，提高速度
-	for idx, testURL := range testURLs {
+	for _, testURL := range testURLs {
 		var urlLatencies []time.Duration
 		successCount := 0
 		urlErrors := []error{}
@@ -615,8 +615,9 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 				continue
 			}
 
-			// 2xx/3xx 认为连接成功，但需要确保至少读取了一些数据
-			if statusCode >= 200 && statusCode < 400 && n > 0 {
+			// 2xx/3xx 认为连接成功
+			// 注意：204 No Content 没有响应体（n==0），但仍然是成功的连接
+			if statusCode >= 200 && statusCode < 400 {
 				urlLatencies = append(urlLatencies, latency)
 				successCount++
 			} else {
@@ -637,10 +638,8 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string) (time
 			successfulTests = append(successfulTests, avgLatency)
 			urlSuccessCount++
 
-			// 优化：如果第一个 URL 测试通过，立即返回结果，提高速度
-			if idx == 0 {
-				return avgLatency, nil
-			}
+			// 任意一个 URL 测试通过即可返回，不必全部测试
+			return avgLatency, nil
 		}
 	}
 
