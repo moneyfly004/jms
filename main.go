@@ -64,7 +64,6 @@ type GitHubSearchResult struct {
 		Repo    struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
-		UpdatedAt string `json:"updated_at"` // 文件更新时间
 	} `json:"items"`
 }
 
@@ -2107,19 +2106,20 @@ func (c *Collector) CollectNn8qozmuNodes() error {
 }
 
 // SearchSubscribeTokenLinks 搜索包含 /api/v1/client/subscribe?token= 的链接
-// 只返回一周内更新的文件中的链接
+// 只返回三个月内更新的仓库中的链接
 func (c *Collector) SearchSubscribeTokenLinks(keywords []string) ([]string, error) {
 	var allLinks []string
 	seenLinks := make(map[string]bool)
 
-	// 计算一周前的时间
-	oneWeekAgo := time.Now().AddDate(0, 0, -7)
+	// 计算三个月前的日期，用于 GitHub 搜索过滤
+	threeMonthsAgo := time.Now().AddDate(0, -3, 0).Format("2006-01-02")
 
 	for _, keyword := range keywords {
-		log.Printf("正在搜索订阅 token 关键词: %s", keyword)
+		log.Printf("正在搜索订阅 token 关键词: %s（仅三个月内更新的仓库）", keyword)
 
-		// GitHub API 搜索代码
-		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+		// GitHub Code Search API 支持 pushed:>日期 过滤仓库最近推送时间
+		searchURL := fmt.Sprintf("%s/search/code?q=%s+pushed:>%s&per_page=100",
+			GitHubAPIBaseURL, url.QueryEscape(keyword), threeMonthsAgo)
 
 		var results GitHubSearchResult
 		if err := c.makeRequest(searchURL, &results); err != nil {
@@ -2127,29 +2127,10 @@ func (c *Collector) SearchSubscribeTokenLinks(keywords []string) ([]string, erro
 			continue
 		}
 
-		log.Printf("找到 %d 个结果", results.TotalCount)
+		log.Printf("找到 %d 个结果（三个月内更新）", results.TotalCount)
 
 		// 处理每个结果
 		for _, item := range results.Items {
-			// 检查文件的更新时间，只处理一周内更新的文件
-			if item.UpdatedAt != "" {
-				updatedTime, err := time.Parse(time.RFC3339, item.UpdatedAt)
-				if err != nil {
-					// 如果解析失败，尝试其他格式
-					updatedTime, err = time.Parse("2006-01-02T15:04:05Z", item.UpdatedAt)
-					if err != nil {
-						log.Printf("无法解析文件更新时间 %s: %v，跳过", item.UpdatedAt, err)
-						continue
-					}
-				}
-
-				// 如果文件更新时间超过一周，跳过
-				if updatedTime.Before(oneWeekAgo) {
-					log.Printf("文件 %s 更新时间 %s 超过一周，跳过", item.HTMLURL, item.UpdatedAt)
-					continue
-				}
-			}
-
 			// 获取文件内容
 			fileContent, err := c.getFileContent(item.APIURL)
 			if err != nil {
