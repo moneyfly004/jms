@@ -13,6 +13,10 @@ https://gist.githubusercontent.com/moneyfly004/e2b2b5f89928dcb48a62d6394504a324/
 ```
 https://gist.githubusercontent.com/moneyfly004/fa0e0bfff22b50d9ca9d92b82ebe2f7c/raw/sub.txt
 ```
+https://gist.githubusercontent.com/moneyfly1/73a34355ea99f43d02d7916771d336d5/raw/all.yaml
+```
+https://gist.githubusercontent.com/moneyfly1/73a34355ea99f43d02d7916771d336d5/raw/base64.txt
+```
 
 将这些地址添加到你的代理客户端（Clash、V2Ray、Shadowsocks 等）即可自动获取最新节点。
 
