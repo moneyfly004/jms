@@ -9,6 +9,7 @@ on:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       contents: write # 需要写入权限来推送代码
       
