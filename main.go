@@ -967,37 +967,3 @@ func main() {
 		}
 	}
 }
-
-// ==============================================================================
-// ⚠️ 依赖外部函数的兼容存根 (STUBS)
-// ==============================================================================
-
-type Node struct {
-	Type   string
-	Server string
-	Port   int
-}
-
-func ParseNodeLink(link string) (*Node, error) {
-	parsedURL, err := url.Parse(link)
-	if err != nil {
-		return nil, err
-	}
-	port := 80
-	if p := parsedURL.Port(); p != "" {
-		port, _ = strconv.Atoi(p)
-	}
-	return &Node{Type: parsedURL.Scheme, Server: parsedURL.Hostname(), Port: port}, nil
-}
-
-func safeBase64Decode(content string) (string, error) {
-	return "", fmt.Errorf("fallback")
-}
-
-func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
-	return c.TestNode(nodeLink) // 默认回退 TCP 测速
-}
-
-func (c *Collector) PushToGist(filename string, nodes []*ValidNode) error {
-	return nil
-}
