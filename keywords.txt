@@ -9,11 +9,5 @@ jjsubmarines.com
 
 # 其他订阅源
 m7r52rosihxm.com
-ninjasub.com
 nginx24zfd.xyz
-iplcme.com
-smallstrawberry.com
-ssidwork.com
-fcsubcn.cc
-nn8qozmu.top
-/api/v1/client/subscribe?token=
+
