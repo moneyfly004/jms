@@ -2653,8 +2653,8 @@ func main() {
 		return
 	}
 
-	// 设置 30 分钟超时，增加采集时间
-	timeout := 30 * time.Minute
+	// 设置 60 分钟超时，增加采集时间
+	timeout := 60 * time.Minute
 	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
 		if d, err := time.ParseDuration(timeoutEnv); err == nil && d > 0 {
 			timeout = d
