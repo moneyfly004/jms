@@ -68,7 +68,14 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        
+
+        # 检查并提交 links.txt
+        if [ -f links.txt ]; then
+          link_count=$(wc -l < links.txt | tr -d ' ')
+          echo "📊 links.txt 包含 $link_count 个有效订阅链接"
+          git add links.txt
+        fi
+
         # 检查并提交 nodes.txt
         if [ -f nodes.txt ]; then
           node_count=$(wc -l < nodes.txt | tr -d ' ')
@@ -82,10 +89,13 @@ jobs:
         if git diff --staged --quiet; then
           echo "ℹ️ 没有新的节点更新（文件内容未变化）"
         else
-          echo "✅ 检测到节点更新，准备提交..."
-          commit_msg="自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')]"
+          echo "✅ 检测到更新，准备提交..."
+          commit_msg="自动更新 [$(date +'%Y-%m-%d %H:%M:%S')]"
+          if [ -f links.txt ]; then
+            commit_msg="$commit_msg - links: $link_count"
+          fi
           if [ -f nodes.txt ]; then
-            commit_msg="$commit_msg - nodes: $node_count"
+            commit_msg="$commit_msg, nodes: $node_count"
           fi
           git commit -m "$commit_msg"
           
