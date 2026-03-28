@@ -140,12 +140,13 @@ func (c *Collector) CollectNodesForKeyword(keyword string) error {
 	log.Printf("关键词 [%s] 共提取到 %d 个链接，开始并发解析与测速", keyword, len(links))
 
 	var allValidNodes []*ValidNode
+	var validLinks []string // 保存有效的订阅链接
 	var wg sync.WaitGroup
 	resultsChan := make(chan *NodeResult, len(links))
 	var mu sync.Mutex
 
 	// 并发控制：避免同时发起过多请求导致内存或文件描述符耗尽
-	maxConcurrency := 15
+	maxConcurrency := 30 // 提高并发数
 	if maxConcurrencyEnv := os.Getenv("MAX_CONCURRENCY"); maxConcurrencyEnv != "" {
 		if n, err := strconv.Atoi(maxConcurrencyEnv); err == nil && n > 0 {
 			maxConcurrency = n
@@ -197,6 +198,14 @@ func (c *Collector) CollectNodesForKeyword(keyword string) error {
 					mu.Unlock()
 				}
 			}
+
+			// 如果这个链接有可用节点，记录为有效链接
+			if len(result.ValidNodes) > 0 {
+				mu.Lock()
+				validLinks = append(validLinks, l)
+				mu.Unlock()
+			}
+
 			resultsChan <- result
 		}(link)
 	}
@@ -214,6 +223,15 @@ func (c *Collector) CollectNodesForKeyword(keyword string) error {
 	}
 
 	log.Printf("关键词 [%s] 测速完成，共解析 %d 个节点，其中可用节点: %d 个", keyword, totalNodes, len(allValidNodes))
+
+	// 保存有效链接到 links.txt
+	if len(validLinks) > 0 {
+		if err := appendValidLinksToFile(validLinks); err != nil {
+			log.Printf("⚠️ 保存有效链接失败: %v", err)
+		} else {
+			log.Printf("✅ 已保存 %d 个有效订阅链接到 links.txt", len(validLinks))
+		}
+	}
 
 	if len(allValidNodes) > 0 {
 		return c.saveNodesToFile(allValidNodes, keyword)
@@ -912,6 +930,43 @@ func testNodesFromFile() {
 		}
 	}
 	fmt.Printf("\n总计: %d 个节点, %d 个可用, %d 个不可用\n", len(nodes), validCount, len(nodes)-validCount)
+}
+
+// appendValidLinksToFile 追加有效链接到 links.txt（去重）
+func appendValidLinksToFile(newLinks []string) error {
+	existingLinks := make(map[string]bool)
+	if content, err := os.ReadFile("links.txt"); err == nil {
+		scanner := bufio.NewScanner(strings.NewReader(string(content)))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				existingLinks[line] = true
+			}
+		}
+	}
+
+	file, err := os.OpenFile("links.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	addedCount := 0
+	for _, link := range newLinks {
+		if !existingLinks[link] {
+			fmt.Fprintln(writer, link)
+			existingLinks[link] = true
+			addedCount++
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+
+	log.Printf("📝 新增 %d 个有效链接", addedCount)
+	return nil
 }
 
 // ======= 主程序入口 =======
