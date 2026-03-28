@@ -69,6 +69,11 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
 
+        # 检查并提交 keywords.txt（可能被自动清理）
+        if [ -f keywords.txt ]; then
+          git add keywords.txt
+        fi
+
         # 检查并提交 links.txt
         if [ -f links.txt ]; then
           link_count=$(wc -l < links.txt | tr -d ' ')
