@@ -126,15 +126,15 @@ func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
 }
 
 // CollectNodesForKeyword 采集、解析、测速指定关键词下的所有节点
-func (c *Collector) CollectNodesForKeyword(keyword string) error {
+func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 	links, err := c.SearchKeywordLinks(keyword)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if len(links) == 0 {
-		log.Printf("关键词 [%s] 未提取到任何有效链接，跳过", keyword)
-		return nil
+		log.Printf("关键词 [%s] 未提取到任何有效链接", keyword)
+		return false, nil
 	}
 
 	log.Printf("关键词 [%s] 共提取到 %d 个链接，开始并发解析与测速", keyword, len(links))
@@ -234,9 +234,10 @@ func (c *Collector) CollectNodesForKeyword(keyword string) error {
 	}
 
 	if len(allValidNodes) > 0 {
-		return c.saveNodesToFile(allValidNodes, keyword)
+		err := c.saveNodesToFile(allValidNodes, keyword)
+		return true, err
 	}
-	return nil
+	return false, nil
 }
 
 // saveNodesToFile 边采边存，读取现有文件并追加去重后的新节点
@@ -886,6 +887,25 @@ func loadKeywords(filename string) ([]string, error) {
 	return keywords, scanner.Err()
 }
 
+// saveKeywords 保存关键词到文件
+func saveKeywords(filename string, keywords []string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	fmt.Fprintln(writer, "# 订阅链接关键词配置文件")
+	fmt.Fprintln(writer, "# 每行一个关键词，程序会按顺序采集")
+	fmt.Fprintln(writer, "# 以 # 开头的行为注释")
+	fmt.Fprintln(writer, "")
+	for _, keyword := range keywords {
+		fmt.Fprintln(writer, keyword)
+	}
+	return writer.Flush()
+}
+
 func testNodesFromFile() {
 	if len(os.Args) < 3 {
 		fmt.Println("用法: go run . test-nodes <节点文件>")
@@ -1002,12 +1022,27 @@ func main() {
 
 		log.Printf("✅ 成功加载 %d 个自定义关键词，开始执行自动化采集...", len(keywords))
 
+		var validKeywords []string
 		for _, keyword := range keywords {
-			err := collector.CollectNodesForKeyword(keyword)
+			success, err := collector.CollectNodesForKeyword(keyword)
 			if err != nil {
 				log.Printf("⚠️ 处理关键词 [%s] 时出现错误: %v", keyword, err)
 			}
-			time.Sleep(2 * time.Second) // 避免不同关键词之间的并发过快被 GitHub 封禁
+			if success {
+				validKeywords = append(validKeywords, keyword)
+			} else {
+				log.Printf("❌ 关键词 [%s] 未采集到任何数据，将被删除", keyword)
+			}
+			time.Sleep(2 * time.Second)
+		}
+
+		// 更新 keywords.txt，只保留有效关键词
+		if len(validKeywords) < len(keywords) {
+			if err := saveKeywords("keywords.txt", validKeywords); err != nil {
+				log.Printf("⚠️ 更新 keywords.txt 失败: %v", err)
+			} else {
+				log.Printf("✅ 已更新 keywords.txt，删除了 %d 个无效关键词", len(keywords)-len(validKeywords))
+			}
 		}
 
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
