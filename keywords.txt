@@ -2,6 +2,4 @@
 # 每行一个关键词，程序会按顺序采集
 # 以 # 开头的行为注释
 
-jmssub.net
-jjsubmarines.com
 m7r52rosihxm.com
