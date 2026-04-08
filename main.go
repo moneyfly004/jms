@@ -2,11 +2,11 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
-	"net"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -52,70 +52,16 @@ type ValidNode struct {
 	Error   error
 }
 
-// 轻量级并发安全日志器
-type Logger struct {
-	mu        sync.Mutex
-	startTime time.Time
-	total     int
-	current   int
-}
-
-func NewLogger(total int) *Logger {
-	return &Logger{startTime: time.Now(), total: total}
-}
-
-func (l *Logger) Info(msg string)   { l.print("ℹ️", msg, "\033[34m", "\033[0m") }
-func (l *Logger) Success(msg string){ l.print("✅", msg, "\033[32m", "\033[0m") }
-func (l *Logger) Warn(msg string)   { l.print("⚠️", msg, "\033[33m", "\033[0m") }
-func (l *Logger) Error(msg string)  { l.print("❌", msg, "\033[31m", "\033[0m") }
-func (l *Logger) Progress(msg string) {
-	l.mu.Lock()
-	l.current++
-	fmt.Printf("\r\033[36m⚡ 进度 [%d/%d] %s...\033[0m", l.current, l.total, msg)
-	l.mu.Unlock()
-}
-func (l *Logger) DoneProgress() {
-	l.mu.Lock()
-	fmt.Println()
-	l.mu.Unlock()
-}
-func (l *Logger) PrintSummary(links, nodes int) {
-	l.mu.Lock()
-	elapsed := time.Since(l.startTime).Round(time.Second)
-	fmt.Println("\n" + strings.Repeat("─", 45))
-	fmt.Printf("📊 采集统计 | 耗时: %v\n", elapsed)
-	fmt.Printf("🔗 有效订阅: %d 个\n", links)
-	fmt.Printf("🌐 可用节点: %d 个\n", nodes)
-	fmt.Println(strings.Repeat("─", 45))
-	l.mu.Unlock()
-}
-func (l *Logger) print(icon, msg, color, reset string) {
-	l.mu.Lock()
-	fmt.Printf("%s%s [%s] %s%s\n", color, icon, time.Now().Format("15:04:05"), msg, reset)
-	l.mu.Unlock()
-}
-
-// 全局内存存储（替代高频文件读写）
-var (
-	globalMu    sync.Mutex
-	globalLinks = make(map[string]struct{})
-	globalNodes = make(map[string]struct{})
-	validLinks  []string
-	validNodes  []*ValidNode
-)
-
 type Collector struct {
 	githubToken string
 	httpClient  *http.Client
 	seenLinks   sync.Map
 	seenNodes   sync.Map
-	logger      *Logger
 }
 
-func NewCollector(githubToken string, log *Logger) *Collector {
+func NewCollector(githubToken string) *Collector {
 	return &Collector{
 		githubToken: githubToken,
-		logger:      log,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -202,20 +148,20 @@ func (c *Collector) PreFilterLinks(links []string) []string {
 
 	filtered := len(links) - len(validLinks)
 	if filtered > 0 {
-		c.logger.Info(fmt.Sprintf("预过滤: %d/%d 链接可访问，剔除 %d 个死链", len(validLinks), len(links), filtered))
+		log.Printf("🔗 预过滤: %d/%d 链接可访问，剔除 %d 个死链", len(validLinks), len(links), filtered)
 	}
 	return validLinks
 }
 
 func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
-	c.logger.Info(fmt.Sprintf("正在 GitHub 搜索关键词: %s", keyword))
+	log.Printf("正在 GitHub 搜索关键词: %s", keyword)
 	searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
 	var results GitHubSearchResult
 	if err := c.makeRequest(searchURL, &results); err != nil {
 		return nil, fmt.Errorf("搜索失败: %v", err)
 	}
 
-	c.logger.Info(fmt.Sprintf("找到 %d 个代码文件结果", results.TotalCount))
+	log.Printf("找到 %d 个代码文件结果", results.TotalCount)
 
 	var allLinks []string
 	var mu sync.Mutex
@@ -242,6 +188,7 @@ func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
 						mu.Lock()
 						allLinks = append(allLinks, link)
 						mu.Unlock()
+						log.Printf("发现匹配链接: %s", link)
 					}
 				}
 			}
@@ -251,24 +198,16 @@ func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
 	return allLinks, nil
 }
 
-func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
-	links, err := c.SearchKeywordLinks(keyword)
-	if err != nil || len(links) == 0 {
-		return false, err
-	}
-	return c.ProcessKeywordLinks(keyword, links), nil
-}
-
 func (c *Collector) ProcessKeywordLinks(keyword string, links []string) bool {
 	links = c.PreFilterLinks(links)
 	if len(links) == 0 {
-		c.logger.Warn(fmt.Sprintf("关键词 [%s] 所有链接均不可访问，跳过", keyword))
+		log.Printf("关键词 [%s] 所有链接均不可访问，跳过", keyword)
 		return false
 	}
-	c.logger.Info(fmt.Sprintf("关键词 [%s] 共 %d 个有效链接，开始解析与测速...", keyword, len(links)))
+	log.Printf("关键词 [%s] 共 %d 个有效链接，开始解析与测速...", keyword, len(links))
 
-	nodeCh := make(chan string, 2000)
-	validNodeCh := make(chan *ValidNode, 2000)
+	nodeCh := make(chan string, 1000)
+	validNodeCh := make(chan *ValidNode, 1000)
 
 	var fetchWg sync.WaitGroup
 	fetchSem := make(chan struct{}, 20)
@@ -296,21 +235,15 @@ func (c *Collector) ProcessKeywordLinks(keyword string, links []string) bool {
 		close(nodeCh)
 	}()
 
-	maxConcurrency := getEnvInt("MAX_CONCURRENCY", 40)
+	maxConcurrency := getEnvInt("MAX_CONCURRENCY", 30)
 	var testWg sync.WaitGroup
 	for i := 0; i < maxConcurrency; i++ {
 		testWg.Add(1)
 		go func() {
 			defer testWg.Done()
 			for nodeLink := range nodeCh {
-				c.logger.Progress(nodeLink)
-				var validNode *ValidNode
-				if os.Getenv("USE_SINGBOX") == "false" {
-					validNode = c.TestNode(nodeLink)
-				} else {
-					validNode = c.TestNodeWithSingBox(nodeLink)
-				}
-
+				// 强制仅使用 sing-box 测速，彻底移除 TCP 回退
+				validNode := c.TestNodeWithSingBox(nodeLink)
 				if validNode != nil && validNode.Error == nil {
 					validNodeCh <- validNode
 				}
@@ -323,61 +256,201 @@ func (c *Collector) ProcessKeywordLinks(keyword string, links []string) bool {
 		close(validNodeCh)
 	}()
 
-	var foundNodes []*ValidNode
+	var validNodes []*ValidNode
 	for vn := range validNodeCh {
-		foundNodes = append(foundNodes, vn)
+		validNodes = append(validNodes, vn)
 	}
-	c.logger.DoneProgress()
 
-	if len(foundNodes) > 0 {
-		globalMu.Lock()
-		for _, l := range links {
-			if _, ok := globalLinks[l]; !ok {
-				globalLinks[l] = struct{}{}
-				validLinks = append(validLinks, l)
-			}
+	log.Printf("关键词 [%s] 测速完成，可用节点: %d 个", keyword, len(validNodes))
+
+	if len(validNodes) > 0 {
+		if err := appendValidLinksToFile(links); err != nil {
+			log.Printf("⚠️ 保存有效链接失败: %v", err)
 		}
-		for _, n := range foundNodes {
-			if _, ok := globalNodes[n.Link]; !ok {
-				globalNodes[n.Link] = struct{}{}
-				validNodes = append(validNodes, n)
-			}
-		}
-		globalMu.Unlock()
-		c.logger.Success(fmt.Sprintf("关键词 [%s] 产出 %d 个可用节点", keyword, len(foundNodes)))
+		c.saveNodesToFile(validNodes, keyword)
 		return true
 	}
-	c.logger.Warn(fmt.Sprintf("关键词 [%s] 无可用节点", keyword))
 	return false
 }
 
-// finalizeResults 统一写入文件并推送 Gist
-func finalizeResults(log *Logger, token string) {
-	if len(validLinks) == 0 && len(validNodes) == 0 {
-		log.Warn("本次采集未获得有效数据")
-		return
+func (c *Collector) saveNodesToFile(validNodes []*ValidNode, keyword string) error {
+	var allNodes []string
+	if content, err := os.ReadFile("nodes.txt"); err == nil {
+		decoded, err := safeDecodeBase64(strings.TrimSpace(string(content)))
+		if err == nil {
+			for _, line := range strings.Split(decoded, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					allNodes = append(allNodes, line)
+					c.seenNodes.Store(line, true)
+				}
+			}
+		}
 	}
 
-	if err := os.WriteFile("links.txt", []byte(strings.Join(validLinks, "\n")), 0644); err != nil {
-		log.Error(fmt.Sprintf("写入 links.txt 失败: %v", err))
-	}
-
-	var nodeLines []string
 	for _, n := range validNodes {
-		nodeLines = append(nodeLines, n.Link)
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Join(nodeLines, "\n")))
-	if err := os.WriteFile("nodes.txt", []byte(encoded), 0644); err != nil {
-		log.Error(fmt.Sprintf("写入 nodes.txt 失败: %v", err))
+		allNodes = append(allNodes, n.Link)
 	}
 
-	log.Success(fmt.Sprintf("已写入文件: links.txt(%d) nodes.txt(%d)", len(validLinks), len(validNodes)))
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(strings.Join(allNodes, "\n")))
+	outputFile := "nodes.txt"
+	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
+	}
 
-	collector := NewCollector(token, log)
-	_ = collector.PushToGistFinal()
+	log.Printf("关键词 [%s] 的节点已保存，当前文件总去重节点数: %d", keyword, len(allNodes))
+
+	gistID, gistToken := os.Getenv("GIST_ID"), os.Getenv("GIST_TOKEN")
+	if gistToken == "" {
+		gistToken = c.githubToken
+	}
+	if gistID != "" || gistToken != "" {
+		_ = c.PushToGist(outputFile, validNodes)
+	}
+
+	return nil
 }
 
-// 核心网络与工具函数
+func (c *Collector) ParseNodes(content string) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	if nodes := c.parseClashYAML(content); len(nodes) > 0 {
+		return nodes
+	}
+	if nodes := c.parseSingBoxJSON(content); len(nodes) > 0 {
+		return nodes
+	}
+	decoded, err := safeDecodeBase64(content)
+	if err != nil {
+		decoded = content
+	}
+	return c.extractNodeLinks(decoded)
+}
+
+func (c *Collector) parseClashYAML(content string) []string {
+	var config struct {
+		Proxies []map[string]interface{} `yaml:"proxies"`
+	}
+	if yaml.Unmarshal([]byte(content), &config) != nil {
+		return nil
+	}
+	var nodes []string
+	for _, proxy := range config.Proxies {
+		if link := convertProxyToLink(proxy, true); link != "" {
+			nodes = append(nodes, link)
+		}
+	}
+	return nodes
+}
+
+func (c *Collector) parseSingBoxJSON(content string) []string {
+	var config struct {
+		Outbounds []map[string]interface{} `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(content), &config) != nil {
+		return nil
+	}
+	var nodes []string
+	for _, ob := range config.Outbounds {
+		if link := convertProxyToLink(ob, false); link != "" {
+			nodes = append(nodes, link)
+		}
+	}
+	return nodes
+}
+
+func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
+	pType := getStr(proxy, "type")
+	server := getStr(proxy, "server")
+	if pType == "" || server == "" {
+		return ""
+	}
+	port := "443"
+	if isClash {
+		port = getStrPort(proxy["port"])
+	} else {
+		port = getStrPort(proxy["server_port"])
+	}
+
+	name := getStr(proxy, "name")
+	if !isClash {
+		name = getStr(proxy, "tag")
+	}
+
+	switch pType {
+	case "ss", "shadowsocks":
+		method := getStr(proxy, "cipher")
+		if !isClash {
+			method = getStr(proxy, "method")
+		}
+		pass := getStr(proxy, "password")
+		if method != "" && pass != "" {
+			auth := base64.StdEncoding.EncodeToString([]byte(method + ":" + pass))
+			return fmt.Sprintf("ss://%s@%s:%s#%s", auth, server, port, url.QueryEscape(name))
+		}
+	case "vmess":
+		uuid := getStr(proxy, "uuid")
+		if uuid == "" {
+			return ""
+		}
+		vmessData := map[string]interface{}{
+			"v": "2", "ps": name, "add": server, "port": port, "id": uuid, "aid": 0, "net": "tcp", "type": "none", "tls": "",
+		}
+		if isClash {
+			if tls, _ := proxy["tls"].(bool); tls {
+				vmessData["tls"] = "tls"
+				if sni := getStr(proxy, "sni"); sni != "" {
+					vmessData["sni"] = sni
+				}
+			}
+			if netw := getStr(proxy, "network"); netw != "" {
+				vmessData["net"] = netw
+			}
+		} else {
+			if tls, ok := proxy["tls"].(map[string]interface{}); ok {
+				vmessData["tls"] = "tls"
+				if sni := getStr(tls, "server_name"); sni != "" {
+					vmessData["sni"] = sni
+				}
+			}
+		}
+		jsonData, _ := json.Marshal(vmessData)
+		return "vmess://" + base64.StdEncoding.EncodeToString(jsonData)
+	case "vless", "trojan", "tuic", "hysteria", "hysteria2":
+		u := url.URL{Scheme: strings.TrimRight(pType, "2"), Host: fmt.Sprintf("%s:%s", server, port), Fragment: name}
+		if pType == "vless" || pType == "tuic" {
+			u.User = url.User(getStr(proxy, "uuid"))
+		} else if pType == "trojan" {
+			u.User = url.User(getStr(proxy, "password"))
+		}
+		q := url.Values{}
+		if sni := getStr(proxy, "sni"); sni != "" {
+			q.Set("sni", sni)
+		}
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	return ""
+}
+
+func (c *Collector) extractNodeLinks(content string) []string {
+	var nodes []string
+	prefixes := []string{"ss://", "vmess://", "vless://", "trojan://", "ssr://", "hysteria://", "hy2://", "tuic://", "wg://"}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		for _, p := range prefixes {
+			if strings.HasPrefix(line, p) {
+				nodes = append(nodes, line)
+				break
+			}
+		}
+	}
+	return nodes
+}
+
 func (c *Collector) makeRequest(apiURL string, result interface{}) error {
 	for i := 0; i < MaxRetries; i++ {
 		req, err := http.NewRequest("GET", apiURL, nil)
@@ -391,7 +464,7 @@ func (c *Collector) makeRequest(apiURL string, result interface{}) error {
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			if i == MaxRetries-1 {
-				c.logger.Error(fmt.Sprintf("API 请求网络错误: %v (URL: %s)", err, apiURL))
+				log.Printf("API 请求网络错误: %v (URL: %s)", err, apiURL)
 			}
 			time.Sleep(RetryDelay * time.Duration(i+1))
 			continue
@@ -407,13 +480,14 @@ func (c *Collector) makeRequest(apiURL string, result interface{}) error {
 
 		if resp.StatusCode == 403 || resp.StatusCode == 429 {
 			waitDur := c.parseRateLimitWait(resp)
-			c.logger.Warn(fmt.Sprintf("⏳ API 限流 (HTTP %d)，等待 %v 后重试 (%d/%d)", resp.StatusCode, waitDur.Round(time.Second), i+1, MaxRetries))
+			log.Printf("⏳ API 限流 (HTTP %d)，等待 %v 后重试 (%d/%d) (URL: %s)",
+				resp.StatusCode, waitDur.Round(time.Second), i+1, MaxRetries, apiURL)
 			time.Sleep(waitDur)
 			continue
 		}
 
 		if i == MaxRetries-1 {
-			c.logger.Error(fmt.Sprintf("API 请求失败 HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 200)])))
+			log.Printf("API 请求失败 HTTP %d: %s (URL: %s)", resp.StatusCode, string(body[:min(len(body), 200)]), apiURL)
 		}
 		time.Sleep(RetryDelay * time.Duration(i+1))
 	}
@@ -532,6 +606,19 @@ func loadKeywords(filename string) ([]string, error) {
 	return keywords, scanner.Err()
 }
 
+func appendValidLinksToFile(newLinks []string) error {
+	file, err := os.OpenFile("links.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	for _, link := range newLinks {
+		fmt.Fprintln(writer, link)
+	}
+	return writer.Flush()
+}
+
 func removeKeywords(filename string, toRemove []string) {
 	removeSet := make(map[string]bool)
 	for _, k := range toRemove {
@@ -539,6 +626,7 @@ func removeKeywords(filename string, toRemove []string) {
 	}
 	data, err := os.ReadFile(filename)
 	if err != nil {
+		log.Printf("读取 %s 失败: %v", filename, err)
 		return
 	}
 
@@ -554,7 +642,9 @@ func removeKeywords(filename string, toRemove []string) {
 		}
 	}
 
-	_ = os.WriteFile(filename, []byte(strings.Join(kept, "\n")), 0644)
+	if err := os.WriteFile(filename, []byte(strings.Join(kept, "\n")), 0644); err != nil {
+		log.Printf("写入 %s 失败: %v", filename, err)
+	}
 }
 
 func testNodesFromFile() {
@@ -564,8 +654,7 @@ func testNodesFromFile() {
 	}
 	file, err := os.Open(os.Args[2])
 	if err != nil {
-		fmt.Println("打开文件失败:", err)
-		return
+		log.Fatal(err)
 	}
 	defer file.Close()
 	var nodes []string
@@ -577,7 +666,7 @@ func testNodesFromFile() {
 		}
 	}
 
-	collector := NewCollector("", NewLogger(len(nodes)))
+	collector := NewCollector("")
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	results := make(map[int]*ValidNode)
@@ -586,7 +675,6 @@ func testNodesFromFile() {
 		wg.Add(1)
 		go func(index int, link string) {
 			defer wg.Done()
-			collector.logger.Progress(link)
 			validNode := collector.TestNodeWithSingBox(link)
 			mu.Lock()
 			results[index] = validNode
@@ -594,7 +682,6 @@ func testNodesFromFile() {
 		}(i, nodeLink)
 	}
 	wg.Wait()
-	collector.logger.DoneProgress()
 
 	validCount := 0
 	for i := 0; i < len(nodes); i++ {
@@ -618,34 +705,29 @@ func main() {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	done := make(chan bool, 1)
 	keywords, err := loadKeywords("keywords.txt")
 	if err != nil || len(keywords) == 0 {
-		fmt.Println("\033[31m[❌] 无法加载 keywords.txt 或文件为空，程序终止\033[0m")
-		os.Exit(1)
+		log.Fatalf("❌ 无法加载 keywords.txt 或文件为空 (%v)，程序终止", err)
+		return
 	}
-
-	log := NewLogger(len(keywords) * 50)
-	collector := NewCollector(os.Getenv("GITHUB_TOKEN"), log)
 
 	_ = os.Remove("nodes.txt")
 	_ = os.Remove("links.txt")
-	log.Success(fmt.Sprintf("成功加载 %d 个关键词，已清理残留文件", len(keywords)))
+	log.Println("🧹 已清理本地残留文件，确保推送的都是本次采集结果")
+	log.Printf("✅ 成功加载 %d 个关键词", len(keywords))
+	log.Println("开始执行自动化采集...")
 
 	var bgWg sync.WaitGroup
 	var failedMu sync.Mutex
 	var failedKeywords []string
 
 	for i, keyword := range keywords {
-		links, err := collector.SearchKeywordLinks(keyword)
+		links, err := NewCollector(os.Getenv("GITHUB_TOKEN")).SearchKeywordLinks(keyword)
 		if err != nil || len(links) == 0 {
 			failedMu.Lock()
 			failedKeywords = append(failedKeywords, keyword)
 			failedMu.Unlock()
-			log.Warn(fmt.Sprintf("[%s] 无搜索结果", keyword))
+			log.Printf("⚠️ 关键词 [%s] 无搜索结果，标记为失效", keyword)
 			if i < len(keywords)-1 {
 				time.Sleep(SearchInterval)
 			}
@@ -655,10 +737,13 @@ func main() {
 		bgWg.Add(1)
 		go func(kw string, kLinks []string) {
 			defer bgWg.Done()
-			if !collector.ProcessKeywordLinks(kw, kLinks) {
+			collector := NewCollector(os.Getenv("GITHUB_TOKEN"))
+			hasNodes := collector.ProcessKeywordLinks(kw, kLinks)
+			if !hasNodes {
 				failedMu.Lock()
 				failedKeywords = append(failedKeywords, kw)
 				failedMu.Unlock()
+				log.Printf("⚠️ 关键词 [%s] 无可用节点，标记为失效", kw)
 			}
 		}(keyword, links)
 
@@ -670,9 +755,8 @@ func main() {
 
 	if len(failedKeywords) > 0 {
 		removeKeywords("keywords.txt", failedKeywords)
-		log.Warn(fmt.Sprintf("已移除 %d 个失效关键词", len(failedKeywords)))
+		log.Printf("🗑️ 已从 keywords.txt 中移除 %d 个失效关键词: %v", len(failedKeywords), failedKeywords)
 	}
 
-	finalizeResults(log, os.Getenv("GITHUB_TOKEN"))
-	log.PrintSummary(len(validLinks), len(validNodes))
+	log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 }
