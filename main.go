@@ -90,81 +90,56 @@ var domainBlacklist = map[string]bool{
 	"example.com": true, "127.0.0.1": true, "0.0.0.0": true,
 }
 
-// getFreshnessDate 返回 N 天前的日期字符串（用于 GitHub Repository Search pushed:> 过滤）
-func getFreshnessDate() string {
-	days := getEnvInt("FRESHNESS_DAYS", 30)
-	return time.Now().AddDate(0, 0, -days).Format("2006-01-02")
-}
-
 // DiscoverKeywords 通过种子关键词自动发现机场域名
 func (c *Collector) DiscoverKeywords() []string {
-	// 第一步：通过 Repository Search 找最近活跃的、包含订阅关键词的仓库
+	// 直接用 Code Search 搜索包含订阅链接特征的文件
 	seedQueries := []string{
-		"subscribe client api v1",
-		"clash subscribe proxy",
-		"v2ray subscribe node",
+		"api/v1/client/subscribe",
+		"sub?target=clash",
+		"sub?target=singbox",
+		"clash_verge subscribe",
+		"v2ray subscribe url",
 	}
 
-	freshDate := getFreshnessDate()
 	discovered := make(map[string]bool)
 	maxKeywords := 30
-	activeRepos := make(map[string]bool)
 
 	for _, seed := range seedQueries {
-		log.Printf("🔍 搜索活跃仓库: %s", seed)
-		searchURL := fmt.Sprintf("%s/search/repositories?q=%s+pushed:>%s&sort=updated&per_page=30",
-			GitHubAPIBaseURL, url.QueryEscape(seed), freshDate)
-
-		var repoResults struct {
-			Items []struct {
-				FullName string `json:"full_name"`
-			} `json:"items"`
-		}
-		if err := c.makeRequest(searchURL, &repoResults); err != nil {
-			log.Printf("仓库搜索失败: %v", err)
-			continue
-		}
-		for _, item := range repoResults.Items {
-			activeRepos[item.FullName] = true
-		}
-		time.Sleep(2 * time.Second)
-	}
-
-	log.Printf("📦 找到 %d 个活跃仓库，开始提取订阅域名...", len(activeRepos))
-
-	// 第二步：在活跃仓库中搜索订阅链接，提取域名
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	sem := make(chan struct{}, 5)
-
-	for repo := range activeRepos {
 		if len(discovered) >= maxKeywords {
 			break
 		}
-		wg.Add(1)
-		go func(repoName string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+		log.Printf("🔍 种子搜索: %s", seed)
+		searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=30",
+			GitHubAPIBaseURL, url.QueryEscape(seed))
 
-			searchURL := fmt.Sprintf("%s/search/code?q=subscribe+repo:%s&per_page=10",
-				GitHubAPIBaseURL, url.QueryEscape(repoName))
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("搜索失败: %v", err)
+			continue
+		}
+		log.Printf("  找到 %d 个文件", results.TotalCount)
 
-			var results GitHubSearchResult
-			if err := c.makeRequest(searchURL, &results); err != nil {
-				return
-			}
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		sem := make(chan struct{}, 5)
 
-			for _, item := range results.Items {
-				content, err := c.getFileContent(item.APIURL)
+		for _, item := range results.Items {
+			wg.Add(1)
+			go func(apiURL string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				content, err := c.getFileContent(apiURL)
 				if err != nil {
-					continue
+					return
 				}
 				c.extractDomainsFromContent(content, &mu, discovered)
-			}
-		}(repo)
+			}(item.APIURL)
+		}
+		wg.Wait()
+		time.Sleep(2 * time.Second)
 	}
-	wg.Wait()
 
 	var keywords []string
 	for domain := range discovered {
