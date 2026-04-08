@@ -622,7 +622,13 @@ func (c *Collector) makeRequest(url string, result interface{}) error {
 			return json.NewDecoder(resp.Body).Decode(result)
 		}
 		if resp != nil {
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if i == MaxRetries-1 {
+				log.Printf("API 请求失败 HTTP %d: %s (URL: %s)", resp.StatusCode, string(body[:min(len(body), 200)]), url)
+			}
+		} else if err != nil && i == MaxRetries-1 {
+			log.Printf("API 请求网络错误: %v (URL: %s)", err, url)
 		}
 		time.Sleep(RetryDelay)
 	}
