@@ -77,11 +77,128 @@ func NewCollector(githubToken string) *Collector {
 	}
 }
 
+// --- 关键词自动发现 ---
+
+// 订阅 URL 匹配正则
+var subURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+/(?:api/v1/client/subscribe|sub)\?[^\s"'<>]+`)
+
+// 公共域名黑名单，不作为关键词
+var domainBlacklist = map[string]bool{
+	"github.com": true, "raw.githubusercontent.com": true, "gist.githubusercontent.com": true,
+	"t.me": true, "telegram.org": true, "google.com": true, "youtube.com": true,
+	"cloudflare.com": true, "amazonaws.com": true, "localhost": true,
+	"example.com": true, "127.0.0.1": true, "0.0.0.0": true,
+}
+
+// getFreshnessDate 返回 N 天前的日期字符串（用于 GitHub pushed:> 过滤）
+func getFreshnessDate() string {
+	days := getEnvInt("FRESHNESS_DAYS", 14)
+	return time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+}
+
+// DiscoverKeywords 通过种子关键词自动发现机场域名
+func (c *Collector) DiscoverKeywords() []string {
+	seedPatterns := []string{
+		"/api/v1/client/subscribe",
+		"/sub?target=clash",
+		"/sub?target=singbox",
+	}
+
+	freshDate := getFreshnessDate()
+	discovered := make(map[string]bool)
+	maxKeywords := 30
+
+	for _, seed := range seedPatterns {
+		log.Printf("🔍 种子关键词发现: %s", seed)
+		searchURL := fmt.Sprintf("%s/search/code?q=%s+pushed:>%s&per_page=50",
+			GitHubAPIBaseURL, url.QueryEscape(seed), freshDate)
+
+		var results GitHubSearchResult
+		if err := c.makeRequest(searchURL, &results); err != nil {
+			log.Printf("种子搜索失败: %v", err)
+			continue
+		}
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		sem := make(chan struct{}, 5)
+
+		for _, item := range results.Items {
+			wg.Add(1)
+			go func(apiURL string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				content, err := c.getFileContent(apiURL)
+				if err != nil {
+					return
+				}
+
+				// 提取订阅 URL 中的域名
+				matches := subURLPattern.FindAllString(content, -1)
+				for _, match := range matches {
+					u, err := url.Parse(strings.TrimSpace(match))
+					if err != nil || u.Hostname() == "" {
+						continue
+					}
+					host := u.Hostname()
+					if domainBlacklist[host] || net.ParseIP(host) != nil {
+						continue
+					}
+					mu.Lock()
+					discovered[host] = true
+					mu.Unlock()
+				}
+
+				// 也从普通 https 链接中提取域名
+				allLinks := linkPattern.FindAllString(content, -1)
+				for _, link := range allLinks {
+					u, err := url.Parse(strings.TrimSpace(cleanLink(link)))
+					if err != nil || u.Hostname() == "" {
+						continue
+					}
+					host := u.Hostname()
+					// 只保留看起来像订阅域名的（路径中包含 sub/api/client 等特征）
+					path := strings.ToLower(u.Path + "?" + u.RawQuery)
+					if !strings.Contains(path, "sub") && !strings.Contains(path, "api") && !strings.Contains(path, "client") {
+						continue
+					}
+					if domainBlacklist[host] || net.ParseIP(host) != nil {
+						continue
+					}
+					mu.Lock()
+					discovered[host] = true
+					mu.Unlock()
+				}
+			}(item.APIURL)
+		}
+		wg.Wait()
+		time.Sleep(2 * time.Second)
+
+		if len(discovered) >= maxKeywords {
+			break
+		}
+	}
+
+	var keywords []string
+	for domain := range discovered {
+		keywords = append(keywords, domain)
+		if len(keywords) >= maxKeywords {
+			break
+		}
+	}
+
+	log.Printf("🔑 自动发现 %d 个机场域名关键词", len(keywords))
+	return keywords
+}
+
 // --- 核心采集与测试逻辑 (Pipeline并流架构) ---
 
 func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
 	log.Printf("正在 GitHub 搜索关键词: %s", keyword)
-	searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+	freshDate := getFreshnessDate()
+	searchURL := fmt.Sprintf("%s/search/code?q=%s+pushed:>%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword), freshDate)
 
 	var results GitHubSearchResult
 	if err := c.makeRequest(searchURL, &results); err != nil {
@@ -213,7 +330,7 @@ func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 // 统一写入节点逻辑
 func (c *Collector) saveNodesToFile(validNodes []*ValidNode, keyword string) error {
 	var allNodes []string
-	
+
 	// 读取已有文件并解码
 	if content, err := os.ReadFile("nodes.txt"); err == nil {
 		decoded, err := safeDecodeBase64(strings.TrimSpace(string(content)))
@@ -266,7 +383,7 @@ func (c *Collector) ParseNodes(content string) []string {
 	if nodes := c.parseSingBoxJSON(content); len(nodes) > 0 {
 		return nodes
 	}
-	
+
 	decoded, err := safeDecodeBase64(content)
 	if err != nil {
 		decoded = content // 尝试作为纯文本解析
@@ -331,7 +448,9 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 	switch pType {
 	case "ss", "shadowsocks":
 		method := getStr(proxy, "cipher")
-		if !isClash { method = getStr(proxy, "method") }
+		if !isClash {
+			method = getStr(proxy, "method")
+		}
 		pass := getStr(proxy, "password")
 		if method != "" && pass != "" {
 			auth := base64.StdEncoding.EncodeToString([]byte(method + ":" + pass))
@@ -339,7 +458,9 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 		}
 	case "vmess":
 		uuid := getStr(proxy, "uuid")
-		if uuid == "" { return "" }
+		if uuid == "" {
+			return ""
+		}
 		vmessData := map[string]interface{}{
 			"v": "2", "ps": name, "add": server, "port": port, "id": uuid, "aid": 0, "net": "tcp", "type": "none", "tls": "",
 		}
@@ -347,13 +468,19 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 		if isClash {
 			if tls, _ := proxy["tls"].(bool); tls {
 				vmessData["tls"] = "tls"
-				if sni := getStr(proxy, "sni"); sni != "" { vmessData["sni"] = sni }
+				if sni := getStr(proxy, "sni"); sni != "" {
+					vmessData["sni"] = sni
+				}
 			}
-			if netw := getStr(proxy, "network"); netw != "" { vmessData["net"] = netw }
+			if netw := getStr(proxy, "network"); netw != "" {
+				vmessData["net"] = netw
+			}
 		} else {
 			if tls, ok := proxy["tls"].(map[string]interface{}); ok {
 				vmessData["tls"] = "tls"
-				if sni := getStr(tls, "server_name"); sni != "" { vmessData["sni"] = sni }
+				if sni := getStr(tls, "server_name"); sni != "" {
+					vmessData["sni"] = sni
+				}
 			}
 		}
 		jsonData, _ := json.Marshal(vmessData)
@@ -367,7 +494,9 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 			u.User = url.User(getStr(proxy, "password"))
 		}
 		q := url.Values{}
-		if sni := getStr(proxy, "sni"); sni != "" { q.Set("sni", sni) }
+		if sni := getStr(proxy, "sni"); sni != "" {
+			q.Set("sni", sni)
+		}
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
@@ -377,7 +506,7 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 func (c *Collector) extractNodeLinks(content string) []string {
 	var nodes []string
 	prefixes := []string{"ss://", "vmess://", "vless://", "trojan://", "ssr://", "hysteria://", "hy2://", "tuic://", "wg://"}
-	
+
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -395,7 +524,7 @@ func (c *Collector) extractNodeLinks(content string) []string {
 
 func (c *Collector) TestNode(nodeLink string) *ValidNode {
 	result := &ValidNode{Link: nodeLink}
-	
+
 	// 提取真实的 IP/域名 和 端口
 	host, port, err := extractHostPort(nodeLink)
 	if err != nil {
@@ -415,7 +544,7 @@ func (c *Collector) TestNode(nodeLink string) *ValidNode {
 	}
 	conn.Close()
 	result.Latency = time.Since(start)
-	
+
 	// 简单的类型提取
 	result.Type = strings.SplitN(nodeLink, "://", 2)[0]
 	return result
@@ -425,17 +554,25 @@ func (c *Collector) TestNode(nodeLink string) *ValidNode {
 func extractHostPort(link string) (string, string, error) {
 	if strings.HasPrefix(link, "vmess://") {
 		decoded, err := safeDecodeBase64(strings.TrimPrefix(link, "vmess://"))
-		if err != nil { return "", "", err }
+		if err != nil {
+			return "", "", err
+		}
 		var v map[string]interface{}
-		if json.Unmarshal([]byte(decoded), &v) != nil { return "", "", fmt.Errorf("vmess json invalid") }
+		if json.Unmarshal([]byte(decoded), &v) != nil {
+			return "", "", fmt.Errorf("vmess json invalid")
+		}
 		return getStr(v, "add"), getStrPort(v["port"]), nil
 	}
 
 	if strings.HasPrefix(link, "ssr://") {
 		decoded, err := safeDecodeBase64(strings.TrimPrefix(link, "ssr://"))
-		if err != nil { return "", "", err }
+		if err != nil {
+			return "", "", err
+		}
 		parts := strings.Split(decoded, ":")
-		if len(parts) >= 2 { return parts[0], parts[1], nil }
+		if len(parts) >= 2 {
+			return parts[0], parts[1], nil
+		}
 		return "", "", fmt.Errorf("ssr format invalid")
 	}
 
@@ -450,11 +587,15 @@ func extractHostPort(link string) (string, string, error) {
 				u, err = url.Parse("ss://placeholder@" + parts[1])
 			}
 		}
-		if err != nil { return "", "", err }
+		if err != nil {
+			return "", "", err
+		}
 	}
-	
+
 	host, port, err := net.SplitHostPort(u.Host)
-	if err != nil { return u.Host, "443", nil } // 默认443
+	if err != nil {
+		return u.Host, "443", nil
+	} // 默认443
 	return host, port, nil
 }
 
@@ -462,8 +603,12 @@ func extractHostPort(link string) (string, string, error) {
 
 func (c *Collector) makeRequest(url string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
-	if err != nil { return err }
-	if c.githubToken != "" { req.Header.Set("Authorization", "Bearer "+c.githubToken) }
+	if err != nil {
+		return err
+	}
+	if c.githubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.githubToken)
+	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	for i := 0; i < MaxRetries; i++ {
@@ -472,7 +617,9 @@ func (c *Collector) makeRequest(url string, result interface{}) error {
 			defer resp.Body.Close()
 			return json.NewDecoder(resp.Body).Decode(result)
 		}
-		if resp != nil { resp.Body.Close() }
+		if resp != nil {
+			resp.Body.Close()
+		}
 		time.Sleep(RetryDelay)
 	}
 	return fmt.Errorf("请求重试失败")
@@ -480,7 +627,9 @@ func (c *Collector) makeRequest(url string, result interface{}) error {
 
 func (c *Collector) getFileContent(apiURL string) (string, error) {
 	var fileContent GitHubFileContent
-	if err := c.makeRequest(apiURL, &fileContent); err != nil { return "", err }
+	if err := c.makeRequest(apiURL, &fileContent); err != nil {
+		return "", err
+	}
 	if fileContent.Encoding == "base64" {
 		return safeDecodeBase64(strings.ReplaceAll(fileContent.Content, "\n", ""))
 	}
@@ -492,7 +641,9 @@ func (c *Collector) FetchSubscription(link string) (string, error) {
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := c.httpClient.Do(req)
 	if err != nil || resp.StatusCode != 200 {
-		if resp != nil { resp.Body.Close() }
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return "", fmt.Errorf("fetch error")
 	}
 	defer resp.Body.Close()
@@ -509,22 +660,30 @@ func cleanLink(link string) string {
 }
 
 func getStr(m map[string]interface{}, key string) string {
-	if val, ok := m[key].(string); ok { return val }
+	if val, ok := m[key].(string); ok {
+		return val
+	}
 	return ""
 }
 
 func getStrPort(p interface{}) string {
 	switch v := p.(type) {
-	case int: return strconv.Itoa(v)
-	case float64: return strconv.Itoa(int(v))
-	case string: return v
-	default: return "443"
+	case int:
+		return strconv.Itoa(v)
+	case float64:
+		return strconv.Itoa(int(v))
+	case string:
+		return v
+	default:
+		return "443"
 	}
 }
 
 func getEnvInt(key string, defaultVal int) int {
 	if s := os.Getenv(key); s != "" {
-		if v, err := strconv.Atoi(s); err == nil { return v }
+		if v, err := strconv.Atoi(s); err == nil {
+			return v
+		}
 	}
 	return defaultVal
 }
@@ -546,7 +705,9 @@ func safeDecodeBase64(s string) (string, error) {
 
 func loadKeywords(filename string) ([]string, error) {
 	file, err := os.Open(filename)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer file.Close()
 
 	var keywords []string
@@ -561,7 +722,9 @@ func loadKeywords(filename string) ([]string, error) {
 
 func appendValidLinksToFile(newLinks []string) error {
 	file, err := os.OpenFile("links.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
@@ -650,15 +813,33 @@ func main() {
 		}
 
 		// ✅ 核心修复：每次任务开始前强制清理本地遗留的死节点文件。
-		// 这样由于 Gist 也是文件级覆盖，推送上去的数据就会 100% 保持新鲜，不会有旧数据堆积。
 		_ = os.Remove("nodes.txt")
 		log.Println("🧹 已自动清理本地残留节点文件，确保推送到 Gist 的都是最新测速通过的节点")
 
-		log.Printf("✅ 成功加载 %d 个自定义关键词，开始执行自动化采集...", len(keywords))
+		log.Printf("✅ 成功加载 %d 个手动关键词", len(keywords))
+
+		// 自动发现新的机场域名关键词
+		discovered := collector.DiscoverKeywords()
+		if len(discovered) > 0 {
+			// 合并去重：手动关键词优先
+			seen := make(map[string]bool)
+			for _, k := range keywords {
+				seen[k] = true
+			}
+			for _, k := range discovered {
+				if !seen[k] {
+					keywords = append(keywords, k)
+					seen[k] = true
+				}
+			}
+			log.Printf("📋 合并后共 %d 个关键词（手动 %d + 自动发现 %d）", len(keywords), len(keywords)-len(discovered), len(discovered))
+		}
+
+		log.Println("开始执行自动化采集...")
 
 		for _, keyword := range keywords {
 			collector.CollectNodesForKeyword(keyword)
-			time.Sleep(1 * time.Second) // 降低触发风控概率
+			time.Sleep(1 * time.Second)
 		}
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 	}()
