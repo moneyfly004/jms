@@ -58,9 +58,10 @@ jobs:
         SAVE_ALL_NODES: ${{ secrets.SAVE_ALL_NODES || 'false' }}
         USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
         TEST_SPEED: ${{ secrets.TEST_SPEED || 'false' }}
+        FRESHNESS_DAYS: ${{ secrets.FRESHNESS_DAYS || '14' }}
         SINGBOX_PATH: ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
       run: |
-        go run main.go config.go node_parser.go gist.go singbox.go subscribe.go
+        go run main.go node_parser.go gist.go singbox.go
         
     - name: 提交并推送结果
       env:
