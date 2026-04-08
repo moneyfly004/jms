@@ -1,839 +1,874 @@
 package main
 
 import (
-    "encoding/base64"
-    "encoding/json"
-    "fmt"
-    "net/url"
-    "strconv"
-    "strings"
+	"bufio"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-// ProxyNode 代理节点结构
-type ProxyNode struct {
-    Name     string
-    Type     string
-    Server   string
-    Port     int
-    UUID     string
-    Password string
-    Cipher   string
-    Network  string
-    TLS      bool
-    Insecure bool // 跳过 TLS 证书验证
-    UDP      bool
-    // SSR 相关
-    Protocol      string // SSR 协议
-    ProtocolParam string // SSR 协议参数
-    Obfs          string // SSR 混淆
-    ObfsParam     string // SSR 混淆参数
-    // Hysteria 相关
-    Auth         string // Hysteria 认证
-    ObfsPassword string // Hysteria 混淆密码
-    // WireGuard 相关
-    PrivateKey string // WireGuard 私钥
-    PublicKey  string // WireGuard 公钥
-    Reserved   string // WireGuard Reserved
-    // TUIC 相关
-    Token string // TUIC Token
-    // 通用字段
-    SNI      string // Server Name Indication
-    ALPN     string // Application-Layer Protocol Negotiation
-    Flow     string // VLESS Flow
-    Security string // VMess Security / VLESS Security (tls/reality)
-    AlterID  int    // VMess AlterID
-    // Reality 相关
-    RealityPublicKey string // Reality public key (pbk)
-    RealityShortID   string // Reality short ID (sid)
-    Fingerprint      string // TLS fingerprint (fp)
-    // gRPC 相关
-    ServiceName string // gRPC service name
-    // WebSocket 相关
-    WSHost string // WebSocket host
-    WSPath string // WebSocket path
-    // SS 插件相关
-    Plugin     string // SS 插件名称 (v2ray-plugin, obfs-local, simple-obfs 等)
-    PluginOpts string // SS 插件选项
-    // AnyTLS 相关
-    AnyTLSVersion string // AnyTLS 版本
-    AnyTLSPadding string // AnyTLS 填充方案
-    // GOST 相关
-    GOSTProtocol string // GOST 协议类型
-    GOSTPath     string // GOST 路径
+const (
+	GitHubAPIBaseURL = "https://api.github.com"
+	MaxRetries       = 5
+	RetryDelay       = 3 * time.Second
+	SearchInterval   = 3 * time.Second // GitHub Search API 请求间隔
+)
+
+// 全局预编译正则，提升性能
+var linkPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+// GitHubSearchResult GitHub 搜索结果
+type GitHubSearchResult struct {
+	TotalCount int `json:"total_count"`
+	Items      []struct {
+		HTMLURL string `json:"html_url"`
+		APIURL  string `json:"url"`
+		Path    string `json:"path"`
+		Repo    struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	} `json:"items"`
 }
 
-// ParseNodeLink 解析节点链接 (路由优化)
-func ParseNodeLink(link string) (*ProxyNode, error) {
-    link = strings.TrimSpace(link)
-
-    // 处理前缀特殊的 gost+
-    if strings.HasPrefix(link, "gost+") {
-        return parseGOST(link)
-    }
-
-    scheme, _, found := strings.Cut(link, "://")
-    if !found {
-        return nil, fmt.Errorf("不支持的协议或格式错误")
-    }
-
-    switch strings.ToLower(scheme) {
-    case "vmess":
-        return parseVMess(link)
-    case "ss":
-        return parseShadowsocks(link)
-    case "vless":
-        return parseVLESS(link)
-    case "trojan":
-        return parseTrojan(link)
-    case "ssr":
-        return parseSSR(link)
-    case "hysteria":
-        return parseHysteria(link)
-    case "hysteria2", "hy2":
-        return parseHysteria2(link)
-    case "wireguard", "wg":
-        return parseWireGuard(link)
-    case "tuic":
-        return parseTUIC(link)
-    case "http", "https":
-        return parseHTTP(link)
-    case "socks", "socks4", "socks5":
-        return parseSOCKS(link)
-    case "anytls":
-        return parseAnyTLS(link)
-    case "gost":
-        return parseGOST(link)
-    default:
-        return nil, fmt.Errorf("不支持的协议: %s", scheme)
-    }
+type GitHubFileContent struct {
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
 }
 
-// parseVMess 解析 VMess 链接
-func parseVMess(link string) (*ProxyNode, error) {
-    encoded := strings.TrimPrefix(link, "vmess://")
-
-    decoded, err := safeBase64Decode(encoded)
-    if err != nil {
-        return nil, fmt.Errorf("Base64 解码失败: %v", err)
-    }
-
-    var data map[string]interface{}
-    if err := json.Unmarshal([]byte(decoded), &data); err != nil {
-        return nil, fmt.Errorf("JSON 解析失败: %v", err)
-    }
-
-    server := getString(data, "add", "")
-    if server == "" {
-        return nil, fmt.Errorf("缺少服务器地址 (add)")
-    }
-
-    uuid := getString(data, "id", "")
-    if uuid == "" {
-        return nil, fmt.Errorf("缺少 UUID (id)")
-    }
-
-    var port int
-    switch p := data["port"].(type) {
-    case float64:
-        port = int(p)
-    case string:
-        port, _ = strconv.Atoi(p)
-    }
-    if port <= 0 || port > 65535 {
-        return nil, fmt.Errorf("无效的端口: %v", data["port"])
-    }
-
-    network := getString(data, "net", "tcp")
-
-    node := &ProxyNode{
-        Name:    getString(data, "ps", fmt.Sprintf("VMess-%s:%d", server, port)),
-        Type:    "vmess",
-        Server:  server,
-        Port:    port,
-        UUID:    uuid,
-        Network: network,
-        UDP:     true,
-    }
-
-    if scy := getString(data, "scy", ""); scy != "" {
-        node.Security = scy
-    } else if security := getString(data, "security", ""); security != "" {
-        node.Security = security
-    }
-
-    if aid, ok := data["aid"].(float64); ok {
-        node.AlterID = int(aid)
-    } else if alterId, ok := data["alterId"].(float64); ok {
-        node.AlterID = int(alterId)
-    }
-
-    // TLS
-    switch t := data["tls"].(type) {
-    case string:
-        node.TLS = (t == "tls")
-    case bool:
-        node.TLS = t
-    }
-
-    // SNI
-    if sni := getString(data, "sni", ""); sni != "" {
-        node.SNI = sni
-    } else if host := getString(data, "host", ""); host != "" {
-        node.SNI = host
-    }
-
-    // ALPN
-    if alpn, ok := data["alpn"].(string); ok && alpn != "" {
-        node.ALPN = alpn
-    } else if alpnArr, ok := data["alpn"].([]interface{}); ok && len(alpnArr) > 0 {
-        if alpnStr, ok := alpnArr[0].(string); ok {
-            node.ALPN = alpnStr
-        }
-    }
-
-    // WebSocket
-    if network == "ws" || network == "websocket" {
-        if path := getString(data, "path", ""); path != "" {
-            node.WSPath = path
-        }
-        if host := getString(data, "host", ""); host != "" {
-            if node.SNI == "" {
-                node.SNI = host
-            }
-            node.WSHost = host
-        }
-    }
-
-    return node, nil
+type ValidNode struct {
+	Link    string
+	Type    string
+	Latency time.Duration
+	Error   error
 }
 
-// parseVLESS 解析 VLESS 链接
-func parseVLESS(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
-
-    uuid := parsed.User.Username()
-    if uuid == "" {
-        return nil, fmt.Errorf("缺少 UUID")
-    }
-
-    query := parsed.Query()
-    network := queryGetFirst(query, "type")
-    if network == "" {
-        network = "tcp"
-    }
-
-    node := &ProxyNode{
-        Name:    getFragment(parsed, fmt.Sprintf("VLESS-%s:%s", parsed.Hostname(), parsed.Port())),
-        Type:    "vless",
-        Server:  parsed.Hostname(),
-        Port:    getPort(parsed),
-        UUID:    uuid,
-        Network: network,
-        UDP:     true,
-    }
-
-    parseCommonURLParams(node, query)
-
-    security := query.Get("security")
-    node.Security = security
-    if security == "tls" || security == "xtls" || security == "reality" {
-        node.TLS = true
-    }
-
-    if flow := query.Get("flow"); flow != "" {
-        node.Flow = flow
-    }
-
-    if security == "reality" {
-        node.RealityPublicKey = query.Get("pbk")
-        node.RealityShortID = query.Get("sid")
-        node.Fingerprint = query.Get("fp")
-    }
-
-    if network == "grpc" {
-        node.ServiceName = query.Get("serviceName")
-    } else if network == "ws" {
-        node.WSHost = query.Get("host")
-        node.WSPath = query.Get("path")
-    }
-
-    return node, nil
+type Collector struct {
+	githubToken string
+	httpClient  *http.Client
+	seenLinks   sync.Map // 并发安全的全局链接去重
+	seenNodes   sync.Map // 并发安全的全局节点去重
 }
 
-// parseTrojan 解析 Trojan 链接
-func parseTrojan(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
-
-    password := parsed.User.Username()
-    if password == "" {
-        return nil, fmt.Errorf("缺少密码")
-    }
-
-    node := &ProxyNode{
-        Name:     getFragment(parsed, fmt.Sprintf("Trojan-%s:%s", parsed.Hostname(), parsed.Port())),
-        Type:     "trojan",
-        Server:   parsed.Hostname(),
-        Port:     getPort(parsed),
-        Password: password,
-        TLS:      true,
-        UDP:      true,
-    }
-
-    parseCommonURLParams(node, parsed.Query())
-    return node, nil
+func NewCollector(githubToken string) *Collector {
+	return &Collector{
+		githubToken: githubToken,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second, // 稍微缩短以防卡死
+			Transport: &http.Transport{
+				MaxIdleConns:        200,
+				MaxIdleConnsPerHost: 20,
+				IdleConnTimeout:     60 * time.Second,
+				DisableKeepAlives:   false,
+			},
+		},
+	}
 }
 
-// parseShadowsocks 解析 Shadowsocks 链接 (扁平化重构)
-func parseShadowsocks(link string) (*ProxyNode, error) {
-    if decodedLink, err := url.QueryUnescape(link); err == nil {
-        link = decodedLink
-    }
+// PreFilterLinks 并发预过滤链接，剔除无法访问的死链
+func (c *Collector) PreFilterLinks(links []string) []string {
+	type filterResult struct {
+		link  string
+		valid bool
+	}
 
-    var method, password, server string
-    var port int
-    remark := getFragmentFromLink(link)
+	resultCh := make(chan filterResult, len(links))
+	sem := make(chan struct{}, 30) // 并发30个预检请求
+	var wg sync.WaitGroup
 
-    // 处理特殊无 @ 的 base64 编码: ss://base64(...)#remark
-    rest := strings.TrimPrefix(link, "ss://")
-    base64Part, hashPart, _ := strings.Cut(rest, "#")
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 
-    if !strings.Contains(base64Part, "@") {
-        if decoded, err := safeBase64Decode(base64Part); err == nil && strings.Contains(decoded, "@") {
-            link = "ss://" + decoded
-            if hashPart != "" {
-                link += "#" + hashPart
-            }
-        }
-    }
+	for _, link := range links {
+		wg.Add(1)
+		go func(l string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+			// 先验证 URL 格式
+			u, err := url.Parse(l)
+			if err != nil || u.Host == "" {
+				resultCh <- filterResult{l, false}
+				return
+			}
 
-    // 提取密码与加密方法
-    if parsed.User != nil {
-        authInfo, _ := url.QueryUnescape(parsed.User.String())
-        method, password, _ = strings.Cut(authInfo, ":")
+			req, err := http.NewRequest("HEAD", l, nil)
+			if err != nil {
+				resultCh <- filterResult{l, false}
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0")
 
-        // 认证信息可能已被 Base64 编码
-        if password == "" {
-            if decoded, err := safeBase64Decode(authInfo); err == nil && strings.Contains(decoded, ":") {
-                method, password, _ = strings.Cut(decoded, ":")
-            } else {
-                method = "aes-256-gcm" // 缺省加密方法
-                password = authInfo
-            }
-        }
-    }
+			resp, err := client.Do(req)
+			if err != nil {
+				// HEAD 失败再试 GET（有些服务器不支持 HEAD）
+				req2, _ := http.NewRequest("GET", l, nil)
+				if req2 == nil {
+					resultCh <- filterResult{l, false}
+					return
+				}
+				req2.Header.Set("User-Agent", "Mozilla/5.0")
+				resp, err = client.Do(req2)
+				if err != nil {
+					resultCh <- filterResult{l, false}
+					return
+				}
+			}
+			resp.Body.Close()
 
-    if method == "" || password == "" {
-        // 备用方案：检查 ss://base64(method:password)@server:port
-        if authPart, _, ok := strings.Cut(strings.TrimPrefix(link, "ss://"), "@"); ok {
-            if decoded, err := safeBase64Decode(authPart); err == nil {
-                method, password, _ = strings.Cut(decoded, ":")
-            }
-        }
-    }
+			// 2xx/3xx 视为有效
+			valid := resp.StatusCode < 400
+			resultCh <- filterResult{l, valid}
+		}(link)
+	}
 
-    if method == "" || password == "" {
-        return nil, fmt.Errorf("缺少认证信息")
-    }
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
 
-    server = parsed.Hostname()
-    port = getPort(parsed)
+	var validLinks []string
+	for r := range resultCh {
+		if r.valid {
+			validLinks = append(validLinks, r.link)
+		}
+	}
 
-    if remark == "" {
-        remark = fmt.Sprintf("SS-%s:%d", server, port)
-    }
-
-    node := &ProxyNode{
-        Name:     remark,
-        Type:     "ss",
-        Server:   server,
-        Port:     port,
-        Cipher:   method,
-        Password: password,
-    }
-
-    // 插件解析
-    query := parsed.Query()
-    if plugin := query.Get("plugin"); plugin != "" {
-        node.Plugin = plugin
-        if strings.Contains(plugin, ";") {
-            node.PluginOpts = plugin
-        } else {
-            var opts []string
-            for _, k := range []string{"path", "host", "obfs", "obfs-host", "mux", "mode"} {
-                if v := query.Get(k); v != "" {
-                    opts = append(opts, k+"="+v)
-                }
-            }
-            if query.Get("tls") != "" {
-                opts = append(opts, "tls")
-            }
-            node.PluginOpts = strings.Join(opts, ";")
-        }
-    }
-
-    return node, nil
+	filtered := len(links) - len(validLinks)
+	if filtered > 0 {
+		log.Printf("🔗 预过滤: %d/%d 链接可访问，剔除 %d 个死链", len(validLinks), len(links), filtered)
+	}
+	return validLinks
 }
 
-// parseSSR 解析 SSR 链接
-func parseSSR(link string) (*ProxyNode, error) {
-    encoded := strings.TrimPrefix(link, "ssr://")
+// --- 核心采集与测试逻辑 (Pipeline并流架构) ---
 
-    if decoded, err := url.QueryUnescape(encoded); err == nil {
-        encoded = decoded
-    }
+func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
+	log.Printf("正在 GitHub 搜索关键词: %s", keyword)
+	searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
 
-    decodedBytes, err := base64.URLEncoding.DecodeString(encoded)
-    if err != nil {
-        decodedBytes, err = base64.StdEncoding.DecodeString(encoded)
-        if err != nil {
-            return nil, fmt.Errorf("SSR Base64 解码失败: %v", err)
-        }
-    }
+	var results GitHubSearchResult
+	if err := c.makeRequest(searchURL, &results); err != nil {
+		return nil, fmt.Errorf("搜索失败: %v", err)
+	}
 
-    decodedStr := string(decodedBytes)
-    mainPart, paramsPart, _ := strings.Cut(decodedStr, "/")
+	log.Printf("找到 %d 个代码文件结果", results.TotalCount)
 
-    mainParts := strings.Split(mainPart, ":")
-    if len(mainParts) < 6 {
-        return nil, fmt.Errorf("SSR 格式不完整")
-    }
+	var allLinks []string
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 20) // 并发请求GitHub API
 
-    server := mainParts[0]
-    port, err := strconv.Atoi(mainParts[1])
-    if err != nil {
-        return nil, fmt.Errorf("无效的端口: %s", mainParts[1])
-    }
+	for _, item := range results.Items {
+		wg.Add(1)
+		go func(apiURL string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-    protocol := mainParts[2]
-    method := mainParts[3]
-    obfs := mainParts[4]
-    passwordBase64 := strings.Join(mainParts[5:], ":")
+			fileContent, err := c.getFileContent(apiURL)
+			if err != nil {
+				return
+			}
 
-    // 解码密码
-    pwDecoded, err := base64.URLEncoding.DecodeString(passwordBase64)
-    if err != nil {
-        pwDecoded, _ = base64.StdEncoding.DecodeString(passwordBase64)
-    }
-    password := string(pwDecoded)
-
-    node := &ProxyNode{
-        Type:     "ssr",
-        Server:   server,
-        Port:     port,
-        Password: password,
-        Cipher:   method,
-        Protocol: protocol,
-        Obfs:     obfs,
-    }
-
-    // 解析参数
-    var remarks string
-    if paramsPart != "" {
-        if parsedParams, err := url.Parse("?" + paramsPart); err == nil {
-            query := parsedParams.Query()
-
-            if v := query.Get("obfsparam"); v != "" {
-                if dec, _ := base64.URLEncoding.DecodeString(v); len(dec) > 0 {
-                    node.ObfsParam = string(dec)
-                }
-            }
-            if v := query.Get("protoparam"); v != "" {
-                if dec, _ := base64.URLEncoding.DecodeString(v); len(dec) > 0 {
-                    node.ProtocolParam = string(dec)
-                }
-            }
-            if v := query.Get("remarks"); v != "" {
-                if dec, _ := base64.URLEncoding.DecodeString(v); len(dec) > 0 {
-                    remarks = string(dec)
-                }
-            }
-        }
-    }
-
-    if remarks == "" {
-        remarks = fmt.Sprintf("SSR-%s:%d", server, port)
-    }
-    node.Name = remarks
-
-    return node, nil
+			matches := linkPattern.FindAllString(fileContent, -1)
+			for _, match := range matches {
+				link := cleanLink(match)
+				if link != "" && strings.Contains(link, keyword) {
+					if _, loaded := c.seenLinks.LoadOrStore(link, true); !loaded {
+						mu.Lock()
+						allLinks = append(allLinks, link)
+						mu.Unlock()
+						log.Printf("发现匹配链接: %s", link)
+					}
+				}
+			}
+		}(item.APIURL)
+	}
+	wg.Wait()
+	return allLinks, nil
 }
 
-// parseHysteria 解析 Hysteria 链接
-func parseHysteria(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
+	links, err := c.SearchKeywordLinks(keyword)
+	if err != nil || len(links) == 0 {
+		return false, err
+	}
 
-    port := getPort(parsed)
-    return &ProxyNode{
-        Name:         getFragment(parsed, fmt.Sprintf("Hysteria-%s:%d", parsed.Hostname(), port)),
-        Type:         "hysteria",
-        Server:       parsed.Hostname(),
-        Port:         port,
-        Auth:         parsed.Query().Get("auth"),
-        ObfsPassword: parsed.Query().Get("obfs"),
-        UDP:          true,
-    }, nil
+	// 预过滤：并发检测链接可用性，剔除死链
+	links = c.PreFilterLinks(links)
+	if len(links) == 0 {
+		log.Printf("关键词 [%s] 所有链接均不可访问，跳过", keyword)
+		return false, nil
+	}
+
+	log.Printf("关键词 [%s] 共 %d 个有效链接，开始解析与测速...", keyword, len(links))
+
+	// 使用 Pipeline 模式: fetch worker -> parse worker -> test worker
+	nodeCh := make(chan string, 1000)
+	validNodeCh := make(chan *ValidNode, 1000)
+
+	// 1. 获取并解析订阅内容池
+	var fetchWg sync.WaitGroup
+	fetchSem := make(chan struct{}, 20) // 限制并发fetch数
+	for _, link := range links {
+		fetchWg.Add(1)
+		go func(l string) {
+			defer fetchWg.Done()
+			fetchSem <- struct{}{}
+			defer func() { <-fetchSem }()
+			content, err := c.FetchSubscription(l)
+			if err != nil {
+				return
+			}
+			nodes := c.ParseNodes(content)
+			for _, n := range nodes {
+				// 节点级别初步去重
+				if _, loaded := c.seenNodes.LoadOrStore(n, true); !loaded {
+					nodeCh <- n
+				}
+			}
+		}(link)
+	}
+
+	go func() {
+		fetchWg.Wait()
+		close(nodeCh)
+	}()
+
+	// 2. 节点并发测速池
+	maxConcurrency := getEnvInt("MAX_CONCURRENCY", 50)
+	var testWg sync.WaitGroup
+	for i := 0; i < maxConcurrency; i++ {
+		testWg.Add(1)
+		go func() {
+			defer testWg.Done()
+			for nodeLink := range nodeCh {
+				var validNode *ValidNode
+				// 恢复您原有的 SingBox 测速判断逻辑
+				if os.Getenv("USE_SINGBOX") == "false" {
+					validNode = c.TestNode(nodeLink)
+				} else {
+					validNode = c.TestNodeWithSingBox(nodeLink)
+				}
+
+				if validNode != nil && validNode.Error == nil {
+					validNodeCh <- validNode
+				}
+			}
+		}()
+	}
+
+	go func() {
+		testWg.Wait()
+		close(validNodeCh)
+	}()
+
+	// 3. 收集结果
+	var validNodes []*ValidNode
+	for vn := range validNodeCh {
+		validNodes = append(validNodes, vn)
+	}
+
+	log.Printf("关键词 [%s] 测速完成，可用节点: %d 个", keyword, len(validNodes))
+
+	// 写入文件
+	if err := appendValidLinksToFile(links); err != nil {
+		log.Printf("⚠️ 保存有效链接失败: %v", err)
+	}
+	if len(validNodes) > 0 {
+		err := c.saveNodesToFile(validNodes, keyword)
+		return true, err
+	}
+	return false, nil
 }
 
-// parseHysteria2 解析 Hysteria2 链接
-func parseHysteria2(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+// 统一写入节点逻辑
+func (c *Collector) saveNodesToFile(validNodes []*ValidNode, keyword string) error {
+	var allNodes []string
 
-    password := parsed.User.Username()
-    if password == "" {
-        return nil, fmt.Errorf("缺少密码")
-    }
+	// 读取已有文件并解码
+	if content, err := os.ReadFile("nodes.txt"); err == nil {
+		decoded, err := safeDecodeBase64(strings.TrimSpace(string(content)))
+		if err == nil {
+			for _, line := range strings.Split(decoded, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					allNodes = append(allNodes, line)
+					c.seenNodes.Store(line, true)
+				}
+			}
+		}
+	}
 
-    port := getPort(parsed)
-    node := &ProxyNode{
-        Name:     getFragment(parsed, fmt.Sprintf("Hysteria2-%s:%d", parsed.Hostname(), port)),
-        Type:     "hysteria2",
-        Server:   parsed.Hostname(),
-        Port:     port,
-        Password: password,
-        UDP:      true,
-    }
+	// 追加新节点
+	for _, n := range validNodes {
+		allNodes = append(allNodes, n.Link)
+	}
 
-    query := parsed.Query()
-    parseCommonURLParams(node, query)
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(strings.Join(allNodes, "\n")))
+	outputFile := "nodes.txt"
+	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
+	}
 
-    if obfs := query.Get("obfs"); obfs != "" {
-        node.ObfsPassword = obfs
-    }
+	log.Printf("关键词 [%s] 的节点已保存，当前文件总去重节点数: %d", keyword, len(allNodes))
 
-    node.TLS = !node.Insecure
-    return node, nil
+	// 恢复您原有的向 Gist 推送最新数据的逻辑
+	gistID, gistToken := os.Getenv("GIST_ID"), os.Getenv("GIST_TOKEN")
+	if gistToken == "" {
+		gistToken = c.githubToken
+	}
+	if gistID != "" || gistToken != "" {
+		_ = c.PushToGist(outputFile, validNodes)
+	}
+
+	return nil
 }
 
-// parseWireGuard 解析 WireGuard 链接
-func parseWireGuard(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+// --- 协议解析与格式化工具 (优化精简版) ---
 
-    privateKey := parsed.User.Username()
-    if privateKey == "" {
-        return nil, fmt.Errorf("缺少私钥")
-    }
+func (c *Collector) ParseNodes(content string) []string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	if nodes := c.parseClashYAML(content); len(nodes) > 0 {
+		return nodes
+	}
+	if nodes := c.parseSingBoxJSON(content); len(nodes) > 0 {
+		return nodes
+	}
 
-    port := getPort(parsed)
-    return &ProxyNode{
-        Name:       getFragment(parsed, fmt.Sprintf("WireGuard-%s:%d", parsed.Hostname(), port)),
-        Type:       "wireguard",
-        Server:     parsed.Hostname(),
-        Port:       port,
-        PrivateKey: privateKey,
-        PublicKey:  parsed.Query().Get("publickey"),
-        Reserved:   parsed.Query().Get("reserved"),
-        UDP:        true,
-    }, nil
+	decoded, err := safeDecodeBase64(content)
+	if err != nil {
+		decoded = content // 尝试作为纯文本解析
+	}
+	return c.extractNodeLinks(decoded)
 }
 
-// parseTUIC 解析 TUIC 链接
-func parseTUIC(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+func (c *Collector) parseClashYAML(content string) []string {
+	var config struct {
+		Proxies []map[string]interface{} `yaml:"proxies"`
+	}
+	if yaml.Unmarshal([]byte(content), &config) != nil {
+		return nil
+	}
 
-    uuid := parsed.User.Username()
-    if uuid == "" {
-        return nil, fmt.Errorf("缺少 UUID")
-    }
-
-    query := parsed.Query()
-    password := query.Get("password")
-    if password == "" {
-        password = uuid
-    }
-
-    port := getPort(parsed)
-    return &ProxyNode{
-        Name:     getFragment(parsed, fmt.Sprintf("TUIC-%s:%d", parsed.Hostname(), port)),
-        Type:     "tuic",
-        Server:   parsed.Hostname(),
-        Port:     port,
-        UUID:     uuid,
-        Password: password,
-        Token:    query.Get("token"),
-        UDP:      true,
-    }, nil
+	var nodes []string
+	for _, proxy := range config.Proxies {
+		if link := convertProxyToLink(proxy, true); link != "" {
+			nodes = append(nodes, link)
+		}
+	}
+	return nodes
 }
 
-// parseHTTP 解析 HTTP 代理节点
-func parseHTTP(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+func (c *Collector) parseSingBoxJSON(content string) []string {
+	var config struct {
+		Outbounds []map[string]interface{} `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(content), &config) != nil {
+		return nil
+	}
 
-    port := getPort(parsed)
-    node := &ProxyNode{
-        Name:   getFragment(parsed, fmt.Sprintf("HTTP-%s:%d", parsed.Hostname(), port)),
-        Type:   "http",
-        Server: parsed.Hostname(),
-        Port:   port,
-    }
-
-    if parsed.User != nil {
-        node.Password = parsed.User.Username()
-        if pwd, ok := parsed.User.Password(); ok {
-            node.Password = pwd
-        }
-    }
-
-    return node, nil
+	var nodes []string
+	for _, ob := range config.Outbounds {
+		if link := convertProxyToLink(ob, false); link != "" {
+			nodes = append(nodes, link)
+		}
+	}
+	return nodes
 }
 
-// parseSOCKS 解析 SOCKS 代理节点
-func parseSOCKS(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+// 统一的代理转换工厂，大幅消除重复代码
+func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
+	pType := getStr(proxy, "type")
+	server := getStr(proxy, "server")
+	if pType == "" || server == "" {
+		return ""
+	}
 
-    port := getPort(parsed)
-    socksType := "socks5"
-    if parsed.Scheme == "socks4" {
-        socksType = "socks4"
-    }
+	port := "443"
+	if isClash {
+		port = getStrPort(proxy["port"])
+	} else {
+		port = getStrPort(proxy["server_port"])
+	}
 
-    node := &ProxyNode{
-        Name:   getFragment(parsed, fmt.Sprintf("SOCKS-%s:%d", parsed.Hostname(), port)),
-        Type:   socksType,
-        Server: parsed.Hostname(),
-        Port:   port,
-    }
+	name := getStr(proxy, "name")
+	if !isClash {
+		name = getStr(proxy, "tag")
+	}
 
-    if parsed.User != nil {
-        node.Password = parsed.User.Username()
-        if pwd, ok := parsed.User.Password(); ok {
-            node.Password = pwd
-        }
-    }
-
-    return node, nil
+	switch pType {
+	case "ss", "shadowsocks":
+		method := getStr(proxy, "cipher")
+		if !isClash {
+			method = getStr(proxy, "method")
+		}
+		pass := getStr(proxy, "password")
+		if method != "" && pass != "" {
+			auth := base64.StdEncoding.EncodeToString([]byte(method + ":" + pass))
+			return fmt.Sprintf("ss://%s@%s:%s#%s", auth, server, port, url.QueryEscape(name))
+		}
+	case "vmess":
+		uuid := getStr(proxy, "uuid")
+		if uuid == "" {
+			return ""
+		}
+		vmessData := map[string]interface{}{
+			"v": "2", "ps": name, "add": server, "port": port, "id": uuid, "aid": 0, "net": "tcp", "type": "none", "tls": "",
+		}
+		// 简单处理TLS和Network
+		if isClash {
+			if tls, _ := proxy["tls"].(bool); tls {
+				vmessData["tls"] = "tls"
+				if sni := getStr(proxy, "sni"); sni != "" {
+					vmessData["sni"] = sni
+				}
+			}
+			if netw := getStr(proxy, "network"); netw != "" {
+				vmessData["net"] = netw
+			}
+		} else {
+			if tls, ok := proxy["tls"].(map[string]interface{}); ok {
+				vmessData["tls"] = "tls"
+				if sni := getStr(tls, "server_name"); sni != "" {
+					vmessData["sni"] = sni
+				}
+			}
+		}
+		jsonData, _ := json.Marshal(vmessData)
+		return "vmess://" + base64.StdEncoding.EncodeToString(jsonData)
+	case "vless", "trojan", "tuic", "hysteria", "hysteria2":
+		// 使用 URL Scheme 构建通用格式
+		u := url.URL{Scheme: strings.TrimRight(pType, "2"), Host: fmt.Sprintf("%s:%s", server, port), Fragment: name}
+		if pType == "vless" || pType == "tuic" {
+			u.User = url.User(getStr(proxy, "uuid"))
+		} else if pType == "trojan" {
+			u.User = url.User(getStr(proxy, "password"))
+		}
+		q := url.Values{}
+		if sni := getStr(proxy, "sni"); sni != "" {
+			q.Set("sni", sni)
+		}
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	return ""
 }
 
-// parseAnyTLS 解析 AnyTLS 节点
-func parseAnyTLS(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+func (c *Collector) extractNodeLinks(content string) []string {
+	var nodes []string
+	prefixes := []string{"ss://", "vmess://", "vless://", "trojan://", "ssr://", "hysteria://", "hy2://", "tuic://", "wg://"}
 
-    uuid := parsed.User.Username()
-    if uuid == "" {
-        return nil, fmt.Errorf("缺少 UUID")
-    }
-
-    port := getPort(parsed)
-    node := &ProxyNode{
-        Name:   getFragment(parsed, fmt.Sprintf("AnyTLS-%s:%d", parsed.Hostname(), port)),
-        Type:   "anytls",
-        Server: parsed.Hostname(),
-        Port:   port,
-        UUID:   uuid,
-        TLS:    true,
-        UDP:    true,
-    }
-
-    query := parsed.Query()
-    parseCommonURLParams(node, query)
-
-    if version := query.Get("version"); version != "" {
-        node.AnyTLSVersion = version
-    }
-    if padding := query.Get("padding"); padding != "" {
-        node.AnyTLSPadding = padding
-    }
-    if security := query.Get("security"); security != "" {
-        node.Security = security
-    }
-
-    return node, nil
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		for _, p := range prefixes {
+			if strings.HasPrefix(line, p) {
+				nodes = append(nodes, line)
+				break
+			}
+		}
+	}
+	return nodes
 }
 
-// parseGOST 解析 GOST 节点
-func parseGOST(link string) (*ProxyNode, error) {
-    parsed, err := url.Parse(link)
-    if err != nil {
-        return nil, err
-    }
+// --- 核心：精准的节点解析与 TCP 测速 ---
 
-    port := getPort(parsed)
-    protocol := "auto"
+func (c *Collector) TestNode(nodeLink string) *ValidNode {
+	result := &ValidNode{Link: nodeLink}
 
-    if strings.HasPrefix(parsed.Scheme, "gost+") {
-        parts := strings.Split(strings.TrimPrefix(parsed.Scheme, "gost+"), "+")
-        if len(parts) > 0 {
-            protocol = parts[0]
-        }
-    } else if parsed.Scheme == "gost" {
-        if p := parsed.Query().Get("protocol"); p != "" {
-            protocol = p
-        }
-    }
+	// 提取真实的 IP/域名 和 端口
+	host, port, err := extractHostPort(nodeLink)
+	if err != nil {
+		result.Error = fmt.Errorf("解析URL失败: %v", err)
+		return result
+	}
 
-    node := &ProxyNode{
-        Name:         getFragment(parsed, fmt.Sprintf("GOST-%s:%d", parsed.Hostname(), port)),
-        Type:         "gost",
-        Server:       parsed.Hostname(),
-        Port:         port,
-        GOSTProtocol: protocol,
-    }
+	timeout := time.Duration(getEnvInt("TEST_TIMEOUT", 3)) * time.Second
+	address := net.JoinHostPort(host, port)
 
-    if parsed.User != nil {
-        node.Password = parsed.User.Username()
-        if pwd, ok := parsed.User.Password(); ok {
-            node.Password = pwd
-        }
-    }
+	// TCP 测速
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+	conn.Close()
+	result.Latency = time.Since(start)
 
-    query := parsed.Query()
-    if path := query.Get("path"); path != "" {
-        node.GOSTPath = path
-    }
-    if sni := query.Get("sni"); sni != "" {
-        node.SNI = sni
-    }
-    if tls := query.Get("tls"); tls == "true" || tls == "1" {
-        node.TLS = true
-    }
-
-    return node, nil
+	// 简单的类型提取
+	result.Type = strings.SplitN(nodeLink, "://", 2)[0]
+	return result
 }
 
-// ------------------- 核心辅助工具函数 -------------------
+// extractHostPort 准确解析各种协议的连接地址 (替代原缺失的 ParseNodeLink)
+func extractHostPort(link string) (string, string, error) {
+	if strings.HasPrefix(link, "vmess://") {
+		decoded, err := safeDecodeBase64(strings.TrimPrefix(link, "vmess://"))
+		if err != nil {
+			return "", "", err
+		}
+		var v map[string]interface{}
+		if json.Unmarshal([]byte(decoded), &v) != nil {
+			return "", "", fmt.Errorf("vmess json invalid")
+		}
+		return getStr(v, "add"), getStrPort(v["port"]), nil
+	}
 
-// parseCommonURLParams 提取 URL Scheme 协议的公共参数 (DRY 原则优化)
-func parseCommonURLParams(node *ProxyNode, query url.Values) {
-    if sni := queryGetFirst(query, "sni", "peer", "host"); sni != "" && node.SNI == "" {
-        node.SNI = sni
-    }
-    if alpn := query.Get("alpn"); alpn != "" {
-        node.ALPN = alpn
-    }
-    if isQueryTrue(query, "insecure", "allowInsecure", "allow_insecure") {
-        node.Insecure = true
-    }
+	if strings.HasPrefix(link, "ssr://") {
+		decoded, err := safeDecodeBase64(strings.TrimPrefix(link, "ssr://"))
+		if err != nil {
+			return "", "", err
+		}
+		parts := strings.Split(decoded, ":")
+		if len(parts) >= 2 {
+			return parts[0], parts[1], nil
+		}
+		return "", "", fmt.Errorf("ssr format invalid")
+	}
+
+	// 其他标准 URI (ss, vless, trojan, hysteria 等)
+	u, err := url.Parse(link)
+	if err != nil {
+		// 针对老旧不规范 ss:// 链接的容错
+		if strings.HasPrefix(link, "ss://") && !strings.Contains(link, "@") {
+			decoded, _ := safeDecodeBase64(strings.TrimPrefix(link, "ss://"))
+			parts := strings.Split(decoded, "@")
+			if len(parts) == 2 {
+				u, err = url.Parse("ss://placeholder@" + parts[1])
+			}
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return u.Host, "443", nil
+	} // 默认443
+	return host, port, nil
 }
 
-// queryGetFirst 批量获取首个存在的 Query 参数
-func queryGetFirst(query url.Values, keys ...string) string {
-    for _, k := range keys {
-        if v := query.Get(k); v != "" {
-            return v
-        }
-    }
-    return ""
+// --- 基础网络请求与通用工具类 ---
+
+func (c *Collector) makeRequest(apiURL string, result interface{}) error {
+	for i := 0; i < MaxRetries; i++ {
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			return err
+		}
+		if c.githubToken != "" {
+			req.Header.Set("Authorization", "Bearer "+c.githubToken)
+		}
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if i == MaxRetries-1 {
+				log.Printf("API 请求网络错误: %v (URL: %s)", err, apiURL)
+			}
+			time.Sleep(RetryDelay * time.Duration(i+1))
+			continue
+		}
+
+		if resp.StatusCode == 200 {
+			defer resp.Body.Close()
+			return json.NewDecoder(resp.Body).Decode(result)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// 限流处理：读取 GitHub 返回的等待时间
+		if resp.StatusCode == 403 || resp.StatusCode == 429 {
+			waitDur := c.parseRateLimitWait(resp)
+			log.Printf("⏳ API 限流 (HTTP %d)，等待 %v 后重试 (%d/%d) (URL: %s)",
+				resp.StatusCode, waitDur.Round(time.Second), i+1, MaxRetries, apiURL)
+			time.Sleep(waitDur)
+			continue
+		}
+
+		if i == MaxRetries-1 {
+			log.Printf("API 请求失败 HTTP %d: %s (URL: %s)", resp.StatusCode, string(body[:min(len(body), 200)]), apiURL)
+		}
+		time.Sleep(RetryDelay * time.Duration(i+1))
+	}
+	return fmt.Errorf("请求重试 %d 次后失败", MaxRetries)
 }
 
-// isQueryTrue 判断参数是否开启
-func isQueryTrue(query url.Values, keys ...string) bool {
-    for _, k := range keys {
-        if v := query.Get(k); v == "1" || v == "true" {
-            return true
-        }
-    }
-    return false
+// parseRateLimitWait 从响应头解析限流等待时间
+func (c *Collector) parseRateLimitWait(resp *http.Response) time.Duration {
+	// 优先读 Retry-After 头（秒数）
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+			return time.Duration(secs)*time.Second + time.Second
+		}
+	}
+	// 其次读 X-RateLimit-Reset 头（Unix 时间戳）
+	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+		if ts, err := strconv.ParseInt(reset, 10, 64); err == nil {
+			waitDur := time.Until(time.Unix(ts, 0)) + 2*time.Second
+			if waitDur > 0 && waitDur < 120*time.Second {
+				return waitDur
+			}
+		}
+	}
+	// 兜底：等 60 秒（Search API 限流窗口为 1 分钟）
+	return 60 * time.Second
 }
 
-// getPort 解析并获取端口，提供可靠备选逻辑
-func getPort(parsed *url.URL) int {
-    if portStr := parsed.Port(); portStr != "" {
-        if port, err := strconv.Atoi(portStr); err == nil {
-            return port
-        }
-    }
-    switch parsed.Scheme {
-    case "vmess", "vless", "trojan", "https":
-        return 443
-    case "ss", "ssr":
-        return 8388
-    case "http":
-        return 80
-    case "socks", "socks4", "socks5":
-        return 1080
-    default:
-        return 443
-    }
+func (c *Collector) getFileContent(apiURL string) (string, error) {
+	var fileContent GitHubFileContent
+	if err := c.makeRequest(apiURL, &fileContent); err != nil {
+		return "", err
+	}
+	if fileContent.Encoding == "base64" {
+		return safeDecodeBase64(strings.ReplaceAll(fileContent.Content, "\n", ""))
+	}
+	return fileContent.Content, nil
 }
 
-// safeBase64Decode 零分配优化 Base64 清洗解码
-func safeBase64Decode(s string) (string, error) {
-    // 使用 strings.Map 避免产生中间字符串副本，提高性能
-    clean := strings.Map(func(r rune) rune {
-        switch r {
-        case ' ', '\n', '\r':
-            return -1 // 丢弃换行和空格
-        case '-':
-            return '+'
-        case '_':
-            return '/'
-        default:
-            return r
-        }
-    }, s)
+func (c *Collector) FetchSubscription(link string) (string, error) {
+	req, err := http.NewRequest("GET", link, nil)
+	if err != nil {
+		return "", fmt.Errorf("无效URL: %v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-    // 补全 padding
-    if pad := len(clean) % 4; pad != 0 {
-        clean += strings.Repeat("=", 4-pad)
-    }
-
-    decoded, err := base64.StdEncoding.DecodeString(clean)
-    if err != nil {
-        return "", err
-    }
-
-    return string(decoded), nil
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("fetch error: HTTP %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return string(body), nil
 }
 
-// getString 从 Interface Map 中安全提取 String
-func getString(m map[string]interface{}, key, defaultValue string) string {
-    if v, ok := m[key]; ok {
-        if s, ok := v.(string); ok {
-            return s
-        }
-    }
-    return defaultValue
+// --- Helper Functions 助手函数 ---
+
+func cleanLink(link string) string {
+	link = strings.TrimSpace(link)
+	link = strings.TrimRight(link, ".,;!?)>\"'")
+	return link
 }
 
-// getFragment 从 URL 中安全提取节点名称
-func getFragment(parsed *url.URL, defaultValue string) string {
-    if parsed.Fragment != "" {
-        if decoded, err := url.QueryUnescape(parsed.Fragment); err == nil && decoded != "" {
-            return decoded
-        }
-        return parsed.Fragment
-    }
-    return defaultValue
+func getStr(m map[string]interface{}, key string) string {
+	if val, ok := m[key].(string); ok {
+		return val
+	}
+	return ""
 }
 
-// getFragmentFromLink 从原始链接手动提取 # 后面的备注
-func getFragmentFromLink(link string) string {
-    if _, frag, ok := strings.Cut(link, "#"); ok {
-        if decoded, err := url.QueryUnescape(frag); err == nil {
-            return decoded
-        }
-        return frag
-    }
-    return ""
+func getStrPort(p interface{}) string {
+	switch v := p.(type) {
+	case int:
+		return strconv.Itoa(v)
+	case float64:
+		return strconv.Itoa(int(v))
+	case string:
+		return v
+	default:
+		return "443"
+	}
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if s := os.Getenv(key); s != "" {
+		if v, err := strconv.Atoi(s); err == nil {
+			return v
+		}
+	}
+	return defaultVal
+}
+
+// safeDecodeBase64 安全的 Base64 解码，自动处理 padding 和标准/URL编码
+func safeDecodeBase64(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "-", "+")
+	s = strings.ReplaceAll(s, "_", "/")
+	if m := len(s) % 4; m != 0 {
+		s += strings.Repeat("=", 4-m)
+	}
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		b, err = base64.URLEncoding.DecodeString(s)
+	}
+	return string(b), err
+}
+
+func loadKeywords(filename string) ([]string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var keywords []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		if line := strings.TrimSpace(scanner.Text()); line != "" && !strings.HasPrefix(line, "#") {
+			keywords = append(keywords, line)
+		}
+	}
+	return keywords, scanner.Err()
+}
+
+func appendValidLinksToFile(newLinks []string) error {
+	file, err := os.OpenFile("links.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for _, link := range newLinks {
+		fmt.Fprintln(writer, link)
+	}
+	return writer.Flush()
+}
+
+// 恢复您原有的 test-nodes 命令行独立测速功能
+func testNodesFromFile() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法: go run . test-nodes <节点文件>")
+		return
+	}
+	file, err := os.Open(os.Args[2])
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	var nodes []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			nodes = append(nodes, line)
+		}
+	}
+
+	collector := NewCollector("")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	results := make(map[int]*ValidNode)
+
+	for i, nodeLink := range nodes {
+		wg.Add(1)
+		go func(index int, link string) {
+			defer wg.Done()
+			validNode := collector.TestNodeWithSingBox(link) // 恢复调用 singbox.go 中的逻辑
+			mu.Lock()
+			results[index] = validNode
+			mu.Unlock()
+		}(i, nodeLink)
+	}
+	wg.Wait()
+
+	validCount := 0
+	for i := 0; i < len(nodes); i++ {
+		if results[i] != nil && results[i].Error == nil {
+			validCount++
+		}
+	}
+	fmt.Printf("\n总计: %d 个节点, %d 个可用, %d 个不可用\n", len(nodes), validCount, len(nodes)-validCount)
+}
+
+// ======= 主程序入口 =======
+
+func main() {
+	// 恢复您原有的命令行参数检测逻辑
+	if len(os.Args) > 1 && os.Args[1] == "test-nodes" {
+		testNodesFromFile()
+		return
+	}
+
+	timeout := 60 * time.Minute
+	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
+		if d, err := time.ParseDuration(timeoutEnv); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	done := make(chan bool, 1)
+	collector := NewCollector(os.Getenv("GITHUB_TOKEN"))
+
+	go func() {
+		defer func() { done <- true }()
+
+		keywords, err := loadKeywords("keywords.txt")
+		if err != nil || len(keywords) == 0 {
+			log.Fatalf("❌ 无法加载 keywords.txt 或文件为空 (%v)，程序终止", err)
+			return
+		}
+
+		// ✅ 核心修复：每次任务开始前强制清理本地遗留的死节点文件。
+		_ = os.Remove("nodes.txt")
+		log.Println("🧹 已自动清理本地残留节点文件，确保推送到 Gist 的都是最新测速通过的节点")
+
+		log.Printf("✅ 成功加载 %d 个关键词", len(keywords))
+
+		log.Println("开始执行自动化采集...")
+
+		// 多关键词并发采集（限制并发数，避免 GitHub API 限流）
+		keywordConcurrency := getEnvInt("KEYWORD_CONCURRENCY", 5)
+		kwSem := make(chan struct{}, keywordConcurrency)
+		var kwWg sync.WaitGroup
+
+		for _, keyword := range keywords {
+			kwWg.Add(1)
+			go func(kw string) {
+				defer kwWg.Done()
+				kwSem <- struct{}{}
+				defer func() { <-kwSem }()
+
+				collector.CollectNodesForKeyword(kw)
+				time.Sleep(SearchInterval)
+			}(keyword)
+		}
+		kwWg.Wait()
+
+		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
+	}()
+
+	select {
+	case <-done:
+		log.Println("========== 工作流正常结束 ==========")
+	case <-ctx.Done():
+		log.Printf("⏰ 采集超时（%v），强制停止", timeout)
+	}
 }
