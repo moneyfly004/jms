@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,13 +27,6 @@ var (
 	cachedTestURLs    []string
 	cachedTimeout     time.Duration
 	cachedCount       int
-	globalTransport   = &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     30 * time.Second,
-		TLSHandshakeTimeout: 4 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Second,
-	}
 )
 
 func getSingBoxPath() (string, error) {
@@ -48,16 +42,19 @@ func getSingBoxPath() (string, error) {
 			"./sing-box",
 			"sing-box",
 		}
+
 		for _, path := range localPaths {
 			if _, err := os.Stat(path); err == nil {
 				cachedSingBoxPath = path
 				return
 			}
 		}
+
 		if path, err := exec.LookPath("sing-box"); err == nil {
 			cachedSingBoxPath = path
 			return
 		}
+
 		cachedSingBoxErr = errors.New("sing-box 未找到，请确保 sing-box 内核文件在项目目录中")
 	})
 	return cachedSingBoxPath, cachedSingBoxErr
@@ -113,10 +110,6 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 	}
 	result.Type = node.Type
 
-	if os.Getenv("USE_SINGBOX") == "false" {
-		return c.TestNode(nodeLink)
-	}
-
 	singBoxPath, err := getSingBoxPath()
 	if err != nil {
 		result.Error = err
@@ -125,38 +118,24 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 
 	port, err := getFreePort()
 	if err != nil {
-		return c.TestNode(nodeLink)
+		result.Error = fmt.Errorf("分配端口失败: %v", err)
+		return result
 	}
 
 	configFile, err := c.createSingBoxConfig(nodeLink, port)
 	if err != nil {
-		return c.TestNode(nodeLink)
+		result.Error = fmt.Errorf("创建配置失败: %v", err)
+		return result
 	}
 	defer os.Remove(configFile)
 
 	latency, err := c.testLatencyWithSingBox(singBoxPath, configFile, port)
 	if err != nil {
-		nodeLinkShort := nodeLink
-		if len(nodeLinkShort) > 50 {
-			nodeLinkShort = nodeLinkShort[:50]
-		}
 		result.Error = fmt.Errorf("代理测试失败: %v", err)
 		return result
 	}
 
 	result.Latency = latency
-
-	if os.Getenv("TEST_SPEED") == "true" {
-		speed, err := c.testSpeedWithSingBox(singBoxPath, configFile)
-		if err == nil {
-			nodeLinkShort := nodeLink
-			if len(nodeLinkShort) > 50 {
-				nodeLinkShort = nodeLinkShort[:50]
-			}
-			fmt.Printf("节点 %s 速度: %.2f MB/s\n", nodeLinkShort, speed)
-		}
-	}
-
 	return result
 }
 
@@ -407,7 +386,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string, listenPort int) (string
 	outbound["tag"] = "proxy"
 
 	config := map[string]interface{}{
-		"log":       map[string]interface{}{"level": "error"},
+		"log": map[string]interface{}{"level": "error"},
 		"inbounds": []map[string]interface{}{
 			{
 				"type":        "mixed",
@@ -524,7 +503,7 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string, port 
 				continue
 			}
 
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 			req.Header.Set("Accept", "*/*")
 			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 			req.Header.Set("Connection", "keep-alive")
@@ -568,8 +547,4 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string, port 
 		return 0, fmt.Errorf("测试失败，最后错误: %v", lastErr)
 	}
 	return 0, fmt.Errorf("所有测试均未达到最低成功率要求（%d/%d）", minSuccessCount, count)
-}
-
-func (c *Collector) testSpeedWithSingBox(singBoxPath, configFile string) (float64, error) {
-	return 0, nil
 }
