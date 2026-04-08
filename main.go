@@ -215,12 +215,16 @@ func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 	if err != nil || len(links) == 0 {
 		return false, err
 	}
+	return c.ProcessKeywordLinks(keyword, links), nil
+}
 
+// ProcessKeywordLinks 处理已搜索到的链接：预过滤 + fetch + 解析 + 测速
+func (c *Collector) ProcessKeywordLinks(keyword string, links []string) bool {
 	// 预过滤：并发检测链接可用性，剔除死链
 	links = c.PreFilterLinks(links)
 	if len(links) == 0 {
 		log.Printf("关键词 [%s] 所有链接均不可访问，跳过", keyword)
-		return false, nil
+		return false
 	}
 
 	log.Printf("关键词 [%s] 共 %d 个有效链接，开始解析与测速...", keyword, len(links))
@@ -295,23 +299,13 @@ func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 
 	// 只保存产出了可用节点的订阅链接
 	if len(validNodes) > 0 {
-		// 收集产出节点的链接（去重）
-		validLinkSet := make(map[string]bool)
-		for _, vn := range validNodes {
-			validLinkSet[vn.Link] = true
-		}
-		// 保存原始订阅链接中能产出可用节点的
-		var validSubLinks []string
-		for _, link := range links {
-			validSubLinks = append(validSubLinks, link)
-		}
-		if err := appendValidLinksToFile(validSubLinks); err != nil {
+		if err := appendValidLinksToFile(links); err != nil {
 			log.Printf("⚠️ 保存有效链接失败: %v", err)
 		}
-		err := c.saveNodesToFile(validNodes, keyword)
-		return true, err
+		c.saveNodesToFile(validNodes, keyword)
+		return true
 	}
-	return false, nil
+	return false
 }
 
 // 统一写入节点逻辑
@@ -855,23 +849,31 @@ func main() {
 
 		log.Println("开始执行自动化采集...")
 
-		// 多关键词并发采集（限制并发数，避免 GitHub API 限流）
-		keywordConcurrency := getEnvInt("KEYWORD_CONCURRENCY", 5)
-		kwSem := make(chan struct{}, keywordConcurrency)
-		var kwWg sync.WaitGroup
+		// GitHub Search API 必须串行（30次/分钟限制），但搜索后的处理并发在后台
+		var bgWg sync.WaitGroup
+		for i, keyword := range keywords {
+			// 串行搜索：获取链接
+			links, err := collector.SearchKeywordLinks(keyword)
+			if err != nil || len(links) == 0 {
+				if i < len(keywords)-1 {
+					time.Sleep(SearchInterval)
+				}
+				continue
+			}
 
-		for _, keyword := range keywords {
-			kwWg.Add(1)
-			go func(kw string) {
-				defer kwWg.Done()
-				kwSem <- struct{}{}
-				defer func() { <-kwSem }()
+			// 后台并发：预过滤 + fetch + 解析 + 测速
+			bgWg.Add(1)
+			go func(kw string, kLinks []string) {
+				defer bgWg.Done()
+				collector.ProcessKeywordLinks(kw, kLinks)
+			}(keyword, links)
 
-				collector.CollectNodesForKeyword(kw)
+			// 搜索间隔，避免限流
+			if i < len(keywords)-1 {
 				time.Sleep(SearchInterval)
-			}(keyword)
+			}
 		}
-		kwWg.Wait()
+		bgWg.Wait()
 
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 	}()
