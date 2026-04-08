@@ -649,6 +649,11 @@ func main() {
 			return
 		}
 
+		// ✅ 核心修复：每次任务开始前强制清理本地遗留的死节点文件。
+		// 这样由于 Gist 也是文件级覆盖，推送上去的数据就会 100% 保持新鲜，不会有旧数据堆积。
+		_ = os.Remove("nodes.txt")
+		log.Println("🧹 已自动清理本地残留节点文件，确保推送到 Gist 的都是最新测速通过的节点")
+
 		log.Printf("✅ 成功加载 %d 个自定义关键词，开始执行自动化采集...", len(keywords))
 
 		for _, keyword := range keywords {
