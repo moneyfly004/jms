@@ -1,7 +1,6 @@
 # 订阅链接关键词配置文件
 # 每行一个关键词，程序会按顺序采集
 # 以 # 开头的行为注释
+
 sub987.top
 m7r52rosihxm.com
-jmssub.net
-jjsubmarines.com
