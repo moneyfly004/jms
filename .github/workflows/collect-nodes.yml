@@ -69,48 +69,42 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
 
-        # 检查并提交 keywords.txt（可能被自动清理）
-        if [ -f keywords.txt ]; then
-          git add keywords.txt
-        fi
+        link_count=0
+        node_count=0
+        removed_kw=""
 
-        # 检查并提交 links.txt
+        # 统计有效链接数
         if [ -f links.txt ]; then
           link_count=$(wc -l < links.txt | tr -d ' ')
-          echo "📊 links.txt 包含 $link_count 个有效订阅链接"
           git add links.txt
         fi
 
-        # 检查并提交 nodes.txt
+        # 统计节点数（nodes.txt 是 base64 编码，需解码后按行统计）
         if [ -f nodes.txt ]; then
-          node_count=$(wc -l < nodes.txt | tr -d ' ')
-          echo "📊 nodes.txt 包含 $node_count 个节点"
+          node_count=$(base64 -d < nodes.txt 2>/dev/null | grep -c . || echo "0")
           git add nodes.txt
-        else
-          echo "⚠️ nodes.txt 文件不存在"
         fi
-        
-        # 检查是否有未提交的更改
+
+        # 检测被清理的关键词
+        if [ -f keywords.txt ]; then
+          git add keywords.txt
+          removed_kw=$(git diff --staged --unified=0 keywords.txt 2>/dev/null | grep '^-[^-]' | sed 's/^-//' | grep -v '^#' | tr '\n' ',' | sed 's/,$//')
+        fi
+
         if git diff --staged --quiet; then
-          echo "ℹ️ 没有新的节点更新（文件内容未变化）"
+          echo "无更新"
         else
-          echo "✅ 检测到更新，准备提交..."
-          commit_msg="自动更新 [$(date +'%Y-%m-%d %H:%M:%S')]"
-          if [ -f links.txt ]; then
-            commit_msg="$commit_msg - links: $link_count"
-          fi
-          if [ -f nodes.txt ]; then
-            commit_msg="$commit_msg, nodes: $node_count"
-          fi
+          # 构建精简提交信息
+          commit_msg="自动更新节点列表 [$(date +'%Y-%m-%d %H:%M:%S')]"
+          parts=""
+          [ "$link_count" -gt 0 ] && parts="links: ${link_count}"
+          [ "$node_count" -gt 0 ] && parts="${parts:+$parts, }nodes: ${node_count}"
+          [ -n "$removed_kw" ] && parts="${parts:+$parts, }removed: [${removed_kw}]"
+          [ -n "$parts" ] && commit_msg="$commit_msg - $parts"
+
           git commit -m "$commit_msg"
-          
-          # 在推送前先拉取远程更改，避免冲突
-          echo "🔄 拉取远程更改..."
           git pull --rebase origin main || git pull origin main
-          
-          # 推送更改
-          echo "📤 推送更改到远程仓库..."
           git push origin main
-          echo "✅ 已成功推送到 GitHub"
+          echo "✅ 推送完成 | links: $link_count, nodes: $node_count${removed_kw:+, 已移除关键词: [$removed_kw]}"
         fi
 
