@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -242,7 +243,7 @@ func (c *Collector) ProcessKeywordLinks(keyword string, links []string) bool {
 		go func() {
 			defer testWg.Done()
 			for nodeLink := range nodeCh {
-				// 强制仅使用 sing-box 测速，彻底移除 TCP 回退
+				// 强制仅使用 Sing-box 测速
 				validNode := c.TestNodeWithSingBox(nodeLink)
 				if validNode != nil && validNode.Error == nil {
 					validNodeCh <- validNode
@@ -698,65 +699,74 @@ func main() {
 		return
 	}
 
-	timeout := 60 * time.Minute
-	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
-		if d, err := time.ParseDuration(timeoutEnv); err == nil && d > 0 {
-			timeout = d
+	// 修复未使用变量报错：直接使用 context 控制超时
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	done := make(chan bool, 1)
+	collector := NewCollector(os.Getenv("GITHUB_TOKEN"))
+
+	go func() {
+		defer func() { done <- true }()
+
+		keywords, err := loadKeywords("keywords.txt")
+		if err != nil || len(keywords) == 0 {
+			log.Fatalf("❌ 无法加载 keywords.txt 或文件为空 (%v)，程序终止", err)
 		}
-	}
 
-	keywords, err := loadKeywords("keywords.txt")
-	if err != nil || len(keywords) == 0 {
-		log.Fatalf("❌ 无法加载 keywords.txt 或文件为空 (%v)，程序终止", err)
-		return
-	}
+		_ = os.Remove("nodes.txt")
+		_ = os.Remove("links.txt")
+		log.Println("🧹 已清理本地残留文件，确保推送的都是本次采集结果")
+		log.Printf("✅ 成功加载 %d 个关键词", len(keywords))
+		log.Println("开始执行自动化采集...")
 
-	_ = os.Remove("nodes.txt")
-	_ = os.Remove("links.txt")
-	log.Println("🧹 已清理本地残留文件，确保推送的都是本次采集结果")
-	log.Printf("✅ 成功加载 %d 个关键词", len(keywords))
-	log.Println("开始执行自动化采集...")
+		var bgWg sync.WaitGroup
+		var failedMu sync.Mutex
+		var failedKeywords []string
 
-	var bgWg sync.WaitGroup
-	var failedMu sync.Mutex
-	var failedKeywords []string
+		for i, keyword := range keywords {
+			links, err := collector.SearchKeywordLinks(keyword)
+			if err != nil || len(links) == 0 {
+				failedMu.Lock()
+				failedKeywords = append(failedKeywords, keyword)
+				failedMu.Unlock()
+				log.Printf("⚠️ 关键词 [%s] 无搜索结果，标记为失效", keyword)
+				if i < len(keywords)-1 {
+					time.Sleep(SearchInterval)
+				}
+				continue
+			}
 
-	for i, keyword := range keywords {
-		links, err := NewCollector(os.Getenv("GITHUB_TOKEN")).SearchKeywordLinks(keyword)
-		if err != nil || len(links) == 0 {
-			failedMu.Lock()
-			failedKeywords = append(failedKeywords, keyword)
-			failedMu.Unlock()
-			log.Printf("⚠️ 关键词 [%s] 无搜索结果，标记为失效", keyword)
+			bgWg.Add(1)
+			go func(kw string, kLinks []string) {
+				defer bgWg.Done()
+				hasNodes := collector.ProcessKeywordLinks(kw, kLinks)
+				if !hasNodes {
+					failedMu.Lock()
+					failedKeywords = append(failedKeywords, kw)
+					failedMu.Unlock()
+					log.Printf("⚠️ 关键词 [%s] 无可用节点，标记为失效", kw)
+				}
+			}(keyword, links)
+
 			if i < len(keywords)-1 {
 				time.Sleep(SearchInterval)
 			}
-			continue
+		}
+		bgWg.Wait()
+
+		if len(failedKeywords) > 0 {
+			removeKeywords("keywords.txt", failedKeywords)
+			log.Printf("🗑️ 已从 keywords.txt 中移除 %d 个失效关键词: %v", len(failedKeywords), failedKeywords)
 		}
 
-		bgWg.Add(1)
-		go func(kw string, kLinks []string) {
-			defer bgWg.Done()
-			collector := NewCollector(os.Getenv("GITHUB_TOKEN"))
-			hasNodes := collector.ProcessKeywordLinks(kw, kLinks)
-			if !hasNodes {
-				failedMu.Lock()
-				failedKeywords = append(failedKeywords, kw)
-				failedMu.Unlock()
-				log.Printf("⚠️ 关键词 [%s] 无可用节点，标记为失效", kw)
-			}
-		}(keyword, links)
+		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
+	}()
 
-		if i < len(keywords)-1 {
-			time.Sleep(SearchInterval)
-		}
+	select {
+	case <-done:
+		log.Println("========== 工作流正常结束 ==========")
+	case <-ctx.Done():
+		log.Printf("⏰ 采集超时（1小时），强制停止")
 	}
-	bgWg.Wait()
-
-	if len(failedKeywords) > 0 {
-		removeKeywords("keywords.txt", failedKeywords)
-		log.Printf("🗑️ 已从 keywords.txt 中移除 %d 个失效关键词: %v", len(failedKeywords), failedKeywords)
-	}
-
-	log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 }
