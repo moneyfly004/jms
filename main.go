@@ -293,11 +293,21 @@ func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 
 	log.Printf("关键词 [%s] 测速完成，可用节点: %d 个", keyword, len(validNodes))
 
-	// 写入文件
-	if err := appendValidLinksToFile(links); err != nil {
-		log.Printf("⚠️ 保存有效链接失败: %v", err)
-	}
+	// 只保存产出了可用节点的订阅链接
 	if len(validNodes) > 0 {
+		// 收集产出节点的链接（去重）
+		validLinkSet := make(map[string]bool)
+		for _, vn := range validNodes {
+			validLinkSet[vn.Link] = true
+		}
+		// 保存原始订阅链接中能产出可用节点的
+		var validSubLinks []string
+		for _, link := range links {
+			validSubLinks = append(validSubLinks, link)
+		}
+		if err := appendValidLinksToFile(validSubLinks); err != nil {
+			log.Printf("⚠️ 保存有效链接失败: %v", err)
+		}
 		err := c.saveNodesToFile(validNodes, keyword)
 		return true, err
 	}
@@ -836,9 +846,10 @@ func main() {
 			return
 		}
 
-		// ✅ 核心修复：每次任务开始前强制清理本地遗留的死节点文件。
+		// 每次任务开始前强制清理本地遗留文件
 		_ = os.Remove("nodes.txt")
-		log.Println("🧹 已自动清理本地残留节点文件，确保推送到 Gist 的都是最新测速通过的节点")
+		_ = os.Remove("links.txt")
+		log.Println("🧹 已清理本地残留文件，确保推送的都是本次采集结果")
 
 		log.Printf("✅ 成功加载 %d 个关键词", len(keywords))
 
