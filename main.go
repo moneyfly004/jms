@@ -23,8 +23,9 @@ import (
 
 const (
 	GitHubAPIBaseURL = "https://api.github.com"
-	MaxRetries       = 3
-	RetryDelay       = 2 * time.Second
+	MaxRetries       = 5
+	RetryDelay       = 3 * time.Second
+	SearchInterval   = 6 * time.Second // GitHub Search API: 30次/分钟(认证), 10次/分钟(未认证)
 )
 
 // 全局预编译正则，提升性能
@@ -138,7 +139,7 @@ func (c *Collector) DiscoverKeywords() []string {
 			}(item.APIURL)
 		}
 		wg.Wait()
-		time.Sleep(2 * time.Second)
+		time.Sleep(SearchInterval)
 	}
 
 	var keywords []string
@@ -605,34 +606,70 @@ func extractHostPort(link string) (string, string, error) {
 
 // --- 基础网络请求与通用工具类 ---
 
-func (c *Collector) makeRequest(url string, result interface{}) error {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	if c.githubToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.githubToken)
-	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
+func (c *Collector) makeRequest(apiURL string, result interface{}) error {
 	for i := 0; i < MaxRetries; i++ {
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			return err
+		}
+		if c.githubToken != "" {
+			req.Header.Set("Authorization", "Bearer "+c.githubToken)
+		}
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+
 		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode == 200 {
+		if err != nil {
+			if i == MaxRetries-1 {
+				log.Printf("API 请求网络错误: %v (URL: %s)", err, apiURL)
+			}
+			time.Sleep(RetryDelay * time.Duration(i+1))
+			continue
+		}
+
+		if resp.StatusCode == 200 {
 			defer resp.Body.Close()
 			return json.NewDecoder(resp.Body).Decode(result)
 		}
-		if resp != nil {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if i == MaxRetries-1 {
-				log.Printf("API 请求失败 HTTP %d: %s (URL: %s)", resp.StatusCode, string(body[:min(len(body), 200)]), url)
-			}
-		} else if err != nil && i == MaxRetries-1 {
-			log.Printf("API 请求网络错误: %v (URL: %s)", err, url)
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// 限流处理：读取 GitHub 返回的等待时间
+		if resp.StatusCode == 403 || resp.StatusCode == 429 {
+			waitDur := c.parseRateLimitWait(resp)
+			log.Printf("⏳ API 限流 (HTTP %d)，等待 %v 后重试 (%d/%d) (URL: %s)",
+				resp.StatusCode, waitDur.Round(time.Second), i+1, MaxRetries, apiURL)
+			time.Sleep(waitDur)
+			continue
 		}
-		time.Sleep(RetryDelay)
+
+		if i == MaxRetries-1 {
+			log.Printf("API 请求失败 HTTP %d: %s (URL: %s)", resp.StatusCode, string(body[:min(len(body), 200)]), apiURL)
+		}
+		time.Sleep(RetryDelay * time.Duration(i+1))
 	}
-	return fmt.Errorf("请求重试失败")
+	return fmt.Errorf("请求重试 %d 次后失败", MaxRetries)
+}
+
+// parseRateLimitWait 从响应头解析限流等待时间
+func (c *Collector) parseRateLimitWait(resp *http.Response) time.Duration {
+	// 优先读 Retry-After 头（秒数）
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+			return time.Duration(secs)*time.Second + time.Second
+		}
+	}
+	// 其次读 X-RateLimit-Reset 头（Unix 时间戳）
+	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+		if ts, err := strconv.ParseInt(reset, 10, 64); err == nil {
+			waitDur := time.Until(time.Unix(ts, 0)) + 2*time.Second
+			if waitDur > 0 && waitDur < 120*time.Second {
+				return waitDur
+			}
+		}
+	}
+	// 兜底：等 60 秒（Search API 限流窗口为 1 分钟）
+	return 60 * time.Second
 }
 
 func (c *Collector) getFileContent(apiURL string) (string, error) {
@@ -849,7 +886,7 @@ func main() {
 
 		for _, keyword := range keywords {
 			collector.CollectNodesForKeyword(keyword)
-			time.Sleep(1 * time.Second)
+			time.Sleep(SearchInterval)
 		}
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 	}()
