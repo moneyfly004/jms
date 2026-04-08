@@ -300,9 +300,9 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 
 	port := "443"
 	if isClash {
-		port = getPort(proxy["port"])
+		port = getStrPort(proxy["port"])
 	} else {
-		port = getPort(proxy["server_port"])
+		port = getStrPort(proxy["server_port"])
 	}
 
 	name := getStr(proxy, "name")
@@ -410,7 +410,7 @@ func extractHostPort(link string) (string, string, error) {
 		if err != nil { return "", "", err }
 		var v map[string]interface{}
 		if json.Unmarshal([]byte(decoded), &v) != nil { return "", "", fmt.Errorf("vmess json invalid") }
-		return getStr(v, "add"), getPort(v["port"]), nil
+		return getStr(v, "add"), getStrPort(v["port"]), nil
 	}
 
 	if strings.HasPrefix(link, "ssr://") {
@@ -495,7 +495,7 @@ func getStr(m map[string]interface{}, key string) string {
 	return ""
 }
 
-func getPort(p interface{}) string {
+func getStrPort(p interface{}) string {
 	switch v := p.(type) {
 	case int: return strconv.Itoa(v)
 	case float64: return strconv.Itoa(int(v))
