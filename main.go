@@ -684,16 +684,19 @@ func (c *Collector) getFileContent(apiURL string) (string, error) {
 }
 
 func (c *Collector) FetchSubscription(link string) (string, error) {
-	req, _ := http.NewRequest("GET", link, nil)
+	req, err := http.NewRequest("GET", link, nil)
+	if err != nil {
+		return "", fmt.Errorf("无效URL: %v", err)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := c.httpClient.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return "", fmt.Errorf("fetch error")
+	if err != nil {
+		return "", fmt.Errorf("fetch error: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("fetch error: HTTP %d", resp.StatusCode)
+	}
 	body, _ := io.ReadAll(resp.Body)
 	return string(body), nil
 }
