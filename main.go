@@ -199,6 +199,90 @@ func (c *Collector) extractDomainsFromContent(content string, mu *sync.Mutex, di
 	}
 }
 
+// PreFilterLinks 并发预过滤链接，剔除无法访问的死链
+func (c *Collector) PreFilterLinks(links []string) []string {
+	type filterResult struct {
+		link  string
+		valid bool
+	}
+
+	resultCh := make(chan filterResult, len(links))
+	sem := make(chan struct{}, 20) // 并发20个预检请求
+	var wg sync.WaitGroup
+
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	for _, link := range links {
+		wg.Add(1)
+		go func(l string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// 先验证 URL 格式
+			u, err := url.Parse(l)
+			if err != nil || u.Host == "" {
+				resultCh <- filterResult{l, false}
+				return
+			}
+
+			req, err := http.NewRequest("HEAD", l, nil)
+			if err != nil {
+				resultCh <- filterResult{l, false}
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				// HEAD 失败再试 GET（有些服务器不支持 HEAD）
+				req2, _ := http.NewRequest("GET", l, nil)
+				if req2 == nil {
+					resultCh <- filterResult{l, false}
+					return
+				}
+				req2.Header.Set("User-Agent", "Mozilla/5.0")
+				resp, err = client.Do(req2)
+				if err != nil {
+					resultCh <- filterResult{l, false}
+					return
+				}
+			}
+			resp.Body.Close()
+
+			// 2xx/3xx 视为有效
+			valid := resp.StatusCode < 400
+			resultCh <- filterResult{l, valid}
+		}(link)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	var validLinks []string
+	for r := range resultCh {
+		if r.valid {
+			validLinks = append(validLinks, r.link)
+		}
+	}
+
+	filtered := len(links) - len(validLinks)
+	if filtered > 0 {
+		log.Printf("🔗 预过滤: %d/%d 链接可访问，剔除 %d 个死链", len(validLinks), len(links), filtered)
+	}
+	return validLinks
+}
+
 // --- 核心采集与测试逻辑 (Pipeline并流架构) ---
 
 func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
@@ -254,7 +338,14 @@ func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 		return false, err
 	}
 
-	log.Printf("关键词 [%s] 共提取到 %d 个链接，开始解析与测速...", keyword, len(links))
+	// 预过滤：并发检测链接可用性，剔除死链
+	links = c.PreFilterLinks(links)
+	if len(links) == 0 {
+		log.Printf("关键词 [%s] 所有链接均不可访问，跳过", keyword)
+		return false, nil
+	}
+
+	log.Printf("关键词 [%s] 共 %d 个有效链接，开始解析与测速...", keyword, len(links))
 
 	// 使用 Pipeline 模式: fetch worker -> parse worker -> test worker
 	nodeCh := make(chan string, 1000)
@@ -887,10 +978,24 @@ func main() {
 
 		log.Println("开始执行自动化采集...")
 
+		// 多关键词并发采集（限制并发数，避免 GitHub API 限流）
+		keywordConcurrency := getEnvInt("KEYWORD_CONCURRENCY", 3)
+		kwSem := make(chan struct{}, keywordConcurrency)
+		var kwWg sync.WaitGroup
+
 		for _, keyword := range keywords {
-			collector.CollectNodesForKeyword(keyword)
-			time.Sleep(SearchInterval)
+			kwWg.Add(1)
+			go func(kw string) {
+				defer kwWg.Done()
+				kwSem <- struct{}{}
+				defer func() { <-kwSem }()
+
+				collector.CollectNodesForKeyword(kw)
+				time.Sleep(SearchInterval)
+			}(keyword)
 		}
+		kwWg.Wait()
+
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 	}()
 
