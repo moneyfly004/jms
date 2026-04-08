@@ -5,62 +5,45 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 )
 
-// PushToGist 推送节点到 GitHub Gist
-func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
+// PushToGistFinal 统一在采集结束时推送所有结果到 Gist
+func (c *Collector) PushToGistFinal() error {
 	gistID := os.Getenv("GIST_ID")
 	gistToken := os.Getenv("GIST_TOKEN")
-
 	if gistToken == "" {
-		// 如果没有设置 GIST_TOKEN，使用 GITHUB_TOKEN
 		gistToken = c.githubToken
 	}
 
 	if gistToken == "" {
-		return fmt.Errorf("需要 GIST_TOKEN 或 GITHUB_TOKEN 才能推送到 Gist")
+		c.logger.Warn("未配置 GIST_TOKEN 或 GITHUB_TOKEN，跳过 Gist 推送")
+		return nil
 	}
 
-	// 读取文件内容（文件内容是 Base64 编码的）
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile("nodes.txt")
 	if err != nil {
-		return fmt.Errorf("读取文件失败: %v", err)
+		c.logger.Error(fmt.Sprintf("读取 nodes.txt 失败: %v", err))
+		return err
 	}
 
-	// 文件内容是 Base64 编码的，直接使用（客户端会解码）
-	contentStr := string(content)
-
-	// 尝试解码以验证和统计节点数量
-	var fileNodeCount int
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(contentStr))
+	contentStr := strings.TrimSpace(string(content))
+	var nodeCount int
+	decoded, err := base64.StdEncoding.DecodeString(contentStr)
 	if err == nil {
-		// 成功解码，统计节点数量
-		decodedStr := string(decoded)
-		lines := strings.Split(strings.TrimSpace(decodedStr), "\n")
-		if strings.TrimSpace(decodedStr) == "" {
-			fileNodeCount = 0
-		} else {
-			fileNodeCount = len(lines)
+		lines := strings.Split(strings.TrimSpace(string(decoded)), "\n")
+		nodeCount = len(lines)
+		if len(lines) == 1 && lines[0] == "" {
+			nodeCount = 0
 		}
 	} else {
-		// 解码失败，使用节点数组长度
-		fileNodeCount = len(nodes)
-		log.Printf("⚠️ 无法解码文件内容，使用节点数组长度")
+		nodeCount = len(validNodes)
 	}
 
-	log.Printf("📄 读取文件 %s，包含 %d 个节点（Base64 编码）", filePath, fileNodeCount)
-	log.Printf("📊 准备推送 %d 个节点到 Gist", len(nodes))
+	c.logger.Info(fmt.Sprintf("准备推送 %d 个节点到 Gist", nodeCount))
 
-	// 验证节点数量是否一致
-	if fileNodeCount != len(nodes) {
-		log.Printf("⚠️ 警告：文件节点数 (%d) 与节点数组数 (%d) 不一致，使用文件内容", fileNodeCount, len(nodes))
-	}
-
-	// 准备 Gist 内容
 	files := map[string]interface{}{
 		"nodes.txt": map[string]string{
 			"content": contentStr,
@@ -68,30 +51,23 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 	}
 
 	payload := map[string]interface{}{
-		"description": fmt.Sprintf("JMS 节点列表 - %d 个节点", len(nodes)),
+		"description": fmt.Sprintf("JMS 节点列表 - %d 个节点", nodeCount),
 		"public":      true,
 		"files":       files,
 	}
 
 	var apiURL string
-	if gistID == "" {
-		// 创建新的 Gist
-		apiURL = "https://api.github.com/gists"
-	} else {
-		// 更新现有的 Gist
+	method := "POST"
+	if gistID != "" {
 		apiURL = fmt.Sprintf("https://api.github.com/gists/%s", gistID)
-		payload["files"] = files
+		method = "PATCH"
+	} else {
+		apiURL = "https://api.github.com/gists"
 	}
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("JSON 编码失败: %v", err)
-	}
-
-	// 创建请求
-	method := "POST"
-	if gistID != "" {
-		method = "PATCH"
 	}
 
 	req, err := http.NewRequest(method, apiURL, strings.NewReader(string(jsonData)))
@@ -103,7 +79,6 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	// 发送请求
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("请求失败: %v", err)
@@ -113,12 +88,10 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-		log.Printf("❌ Gist API 响应错误: HTTP %d", resp.StatusCode)
-		log.Printf("响应内容: %s", string(body))
+		c.logger.Error(fmt.Sprintf("Gist API 响应错误: HTTP %d", resp.StatusCode))
 		return fmt.Errorf("推送失败 HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	// 解析响应获取 Gist ID
 	var gistResponse struct {
 		ID    string `json:"id"`
 		URL   string `json:"html_url"`
@@ -129,28 +102,19 @@ func (c *Collector) PushToGist(filePath string, nodes []*ValidNode) error {
 
 	if err := json.Unmarshal(body, &gistResponse); err == nil {
 		if gistResponse.ID != "" && gistID == "" {
-			log.Printf("✅ Gist 已创建，ID: %s", gistResponse.ID)
-			log.Printf("📝 请设置环境变量 GIST_ID=%s 以便后续更新", gistResponse.ID)
+			c.logger.Success(fmt.Sprintf("Gist 已创建，ID: %s", gistResponse.ID))
 		} else if gistID != "" {
-			log.Printf("✅ Gist 已更新，ID: %s", gistID)
+			c.logger.Success(fmt.Sprintf("Gist 已更新，ID: %s", gistID))
 		}
 
 		if gistResponse.Files != nil && gistResponse.Files["nodes.txt"].RawURL != "" {
-			log.Printf("🔗 订阅地址: %s", gistResponse.Files["nodes.txt"].RawURL)
+			c.logger.Info(fmt.Sprintf("🔗 订阅地址: %s", gistResponse.Files["nodes.txt"].RawURL))
 		}
-
 		if gistResponse.URL != "" {
-			log.Printf("🌐 Gist 页面: %s", gistResponse.URL)
+			c.logger.Info(fmt.Sprintf("🌐 Gist 页面: %s", gistResponse.URL))
 		}
-
-		// 验证推送的节点数量
-		if len(nodes) > 0 {
-			log.Printf("📊 已推送 %d 个节点到 Gist", len(nodes))
-		}
-	} else {
-		log.Printf("⚠️ 无法解析 Gist 响应，但推送可能已成功")
 	}
 
-	log.Printf("✅ 已成功推送到 GitHub Gist")
+	c.logger.Success("已成功推送到 GitHub Gist")
 	return nil
 }
