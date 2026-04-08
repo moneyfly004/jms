@@ -762,6 +762,36 @@ func appendValidLinksToFile(newLinks []string) error {
 	return writer.Flush()
 }
 
+// removeKeywords 从关键词文件中移除失效关键词
+func removeKeywords(filename string, toRemove []string) {
+	removeSet := make(map[string]bool)
+	for _, k := range toRemove {
+		removeSet[k] = true
+	}
+
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		log.Printf("读取 %s 失败: %v", filename, err)
+		return
+	}
+
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			kept = append(kept, line) // 保留注释和空行
+			continue
+		}
+		if !removeSet[trimmed] {
+			kept = append(kept, line)
+		}
+	}
+
+	if err := os.WriteFile(filename, []byte(strings.Join(kept, "\n")), 0644); err != nil {
+		log.Printf("写入 %s 失败: %v", filename, err)
+	}
+}
+
 // 恢复您原有的 test-nodes 命令行独立测速功能
 func testNodesFromFile() {
 	if len(os.Args) < 3 {
@@ -851,10 +881,17 @@ func main() {
 
 		// GitHub Search API 必须串行（30次/分钟限制），但搜索后的处理并发在后台
 		var bgWg sync.WaitGroup
+		var failedMu sync.Mutex
+		var failedKeywords []string // 无任何可用数据的关键词
+
 		for i, keyword := range keywords {
 			// 串行搜索：获取链接
 			links, err := collector.SearchKeywordLinks(keyword)
 			if err != nil || len(links) == 0 {
+				failedMu.Lock()
+				failedKeywords = append(failedKeywords, keyword)
+				failedMu.Unlock()
+				log.Printf("⚠️ 关键词 [%s] 无搜索结果，标记为失效", keyword)
 				if i < len(keywords)-1 {
 					time.Sleep(SearchInterval)
 				}
@@ -865,7 +902,13 @@ func main() {
 			bgWg.Add(1)
 			go func(kw string, kLinks []string) {
 				defer bgWg.Done()
-				collector.ProcessKeywordLinks(kw, kLinks)
+				hasNodes := collector.ProcessKeywordLinks(kw, kLinks)
+				if !hasNodes {
+					failedMu.Lock()
+					failedKeywords = append(failedKeywords, kw)
+					failedMu.Unlock()
+					log.Printf("⚠️ 关键词 [%s] 无可用节点，标记为失效", kw)
+				}
 			}(keyword, links)
 
 			// 搜索间隔，避免限流
@@ -874,6 +917,12 @@ func main() {
 			}
 		}
 		bgWg.Wait()
+
+		// 清理失效关键词
+		if len(failedKeywords) > 0 {
+			removeKeywords("keywords.txt", failedKeywords)
+			log.Printf("🗑️ 已从 keywords.txt 中移除 %d 个失效关键词: %v", len(failedKeywords), failedKeywords)
+		}
 
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
 	}()
