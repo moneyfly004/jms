@@ -171,8 +171,15 @@ func (c *Collector) CollectNodesForKeyword(keyword string) (bool, error) {
 		go func() {
 			defer testWg.Done()
 			for nodeLink := range nodeCh {
-				validNode := c.TestNode(nodeLink)
-				if validNode.Error == nil {
+				var validNode *ValidNode
+				// 恢复您原有的 SingBox 测速判断逻辑
+				if os.Getenv("USE_SINGBOX") == "false" {
+					validNode = c.TestNode(nodeLink)
+				} else {
+					validNode = c.TestNodeWithSingBox(nodeLink)
+				}
+
+				if validNode != nil && validNode.Error == nil {
 					validNodeCh <- validNode
 				}
 			}
@@ -227,11 +234,22 @@ func (c *Collector) saveNodesToFile(validNodes []*ValidNode, keyword string) err
 	}
 
 	encodedContent := base64.StdEncoding.EncodeToString([]byte(strings.Join(allNodes, "\n")))
-	if err := os.WriteFile("nodes.txt", []byte(encodedContent), 0644); err != nil {
+	outputFile := "nodes.txt"
+	if err := os.WriteFile(outputFile, []byte(encodedContent), 0644); err != nil {
 		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
 	log.Printf("关键词 [%s] 的节点已保存，当前文件总去重节点数: %d", keyword, len(allNodes))
+
+	// 恢复您原有的向 Gist 推送最新数据的逻辑
+	gistID, gistToken := os.Getenv("GIST_ID"), os.Getenv("GIST_TOKEN")
+	if gistToken == "" {
+		gistToken = c.githubToken
+	}
+	if gistID != "" || gistToken != "" {
+		_ = c.PushToGist(outputFile, validNodes)
+	}
+
 	return nil
 }
 
@@ -553,9 +571,62 @@ func appendValidLinksToFile(newLinks []string) error {
 	return writer.Flush()
 }
 
+// 恢复您原有的 test-nodes 命令行独立测速功能
+func testNodesFromFile() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法: go run . test-nodes <节点文件>")
+		return
+	}
+	file, err := os.Open(os.Args[2])
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	var nodes []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			nodes = append(nodes, line)
+		}
+	}
+
+	collector := NewCollector("")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	results := make(map[int]*ValidNode)
+
+	for i, nodeLink := range nodes {
+		wg.Add(1)
+		go func(index int, link string) {
+			defer wg.Done()
+			validNode := collector.TestNodeWithSingBox(link) // 恢复调用 singbox.go 中的逻辑
+			mu.Lock()
+			results[index] = validNode
+			mu.Unlock()
+		}(i, nodeLink)
+	}
+	wg.Wait()
+
+	validCount := 0
+	for i := 0; i < len(nodes); i++ {
+		if results[i] != nil && results[i].Error == nil {
+			validCount++
+		}
+	}
+	fmt.Printf("\n总计: %d 个节点, %d 个可用, %d 个不可用\n", len(nodes), validCount, len(nodes)-validCount)
+}
+
 // ======= 主程序入口 =======
 
 func main() {
+	// 恢复您原有的命令行参数检测逻辑
+	if len(os.Args) > 1 && os.Args[1] == "test-nodes" {
+		testNodesFromFile()
+		return
+	}
+
 	timeout := 60 * time.Minute
 	if timeoutEnv := os.Getenv("COLLECT_TIMEOUT"); timeoutEnv != "" {
 		if d, err := time.ParseDuration(timeoutEnv); err == nil && d > 0 {
