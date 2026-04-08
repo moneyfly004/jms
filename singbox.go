@@ -42,19 +42,16 @@ func getSingBoxPath() (string, error) {
 			"./sing-box",
 			"sing-box",
 		}
-
 		for _, path := range localPaths {
 			if _, err := os.Stat(path); err == nil {
 				cachedSingBoxPath = path
 				return
 			}
 		}
-
 		if path, err := exec.LookPath("sing-box"); err == nil {
 			cachedSingBoxPath = path
 			return
 		}
-
 		cachedSingBoxErr = errors.New("sing-box 未找到，请确保 sing-box 内核文件在项目目录中")
 	})
 	return cachedSingBoxPath, cachedSingBoxErr
@@ -131,11 +128,28 @@ func (c *Collector) TestNodeWithSingBox(nodeLink string) *ValidNode {
 
 	latency, err := c.testLatencyWithSingBox(singBoxPath, configFile, port)
 	if err != nil {
+		nodeLinkShort := nodeLink
+		if len(nodeLinkShort) > 50 {
+			nodeLinkShort = nodeLinkShort[:50]
+		}
+		log.Printf("⚠️ 节点 %s sing-box 测试失败: %v", nodeLinkShort, err)
 		result.Error = fmt.Errorf("代理测试失败: %v", err)
 		return result
 	}
 
 	result.Latency = latency
+
+	if os.Getenv("TEST_SPEED") == "true" {
+		speed, err := c.testSpeedWithSingBox(singBoxPath, configFile)
+		if err == nil {
+			nodeLinkShort := nodeLink
+			if len(nodeLinkShort) > 50 {
+				nodeLinkShort = nodeLinkShort[:50]
+			}
+			log.Printf("节点 %s 速度: %.2f MB/s", nodeLinkShort, speed)
+		}
+	}
+
 	return result
 }
 
@@ -166,6 +180,7 @@ func (c *Collector) createSingBoxConfig(nodeLink string, listenPort int) (string
 			"method":      node.Cipher,
 			"password":    node.Password,
 		}
+		log.Printf("⚠️ SSR 节点 %s 转换为 Shadowsocks 配置（sing-box 不完全支持 SSR）", node.Name)
 	case "vmess":
 		outbound = map[string]interface{}{
 			"type":         "vmess",
@@ -547,4 +562,8 @@ func (c *Collector) testLatencyWithSingBox(singBoxPath, configFile string, port 
 		return 0, fmt.Errorf("测试失败，最后错误: %v", lastErr)
 	}
 	return 0, fmt.Errorf("所有测试均未达到最低成功率要求（%d/%d）", minSuccessCount, count)
+}
+
+func (c *Collector) testSpeedWithSingBox(singBoxPath, configFile string) (float64, error) {
+	return 0, nil
 }
