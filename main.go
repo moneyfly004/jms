@@ -887,24 +887,6 @@ func loadKeywords(filename string) ([]string, error) {
 	return keywords, scanner.Err()
 }
 
-// saveKeywords 保存关键词到文件
-func saveKeywords(filename string, keywords []string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	fmt.Fprintln(writer, "# 订阅链接关键词配置文件")
-	fmt.Fprintln(writer, "# 每行一个关键词，程序会按顺序采集")
-	fmt.Fprintln(writer, "# 以 # 开头的行为注释")
-	fmt.Fprintln(writer, "")
-	for _, keyword := range keywords {
-		fmt.Fprintln(writer, keyword)
-	}
-	return writer.Flush()
-}
 
 func testNodesFromFile() {
 	if len(os.Args) < 3 {
@@ -1022,27 +1004,12 @@ func main() {
 
 		log.Printf("✅ 成功加载 %d 个自定义关键词，开始执行自动化采集...", len(keywords))
 
-		var validKeywords []string
 		for _, keyword := range keywords {
-			success, err := collector.CollectNodesForKeyword(keyword)
+			_, err := collector.CollectNodesForKeyword(keyword)
 			if err != nil {
 				log.Printf("⚠️ 处理关键词 [%s] 时出现错误: %v", keyword, err)
 			}
-			if success {
-				validKeywords = append(validKeywords, keyword)
-			} else {
-				log.Printf("❌ 关键词 [%s] 未采集到任何数据，将被删除", keyword)
-			}
 			time.Sleep(2 * time.Second)
-		}
-
-		// 更新 keywords.txt，只保留有效关键词
-		if len(validKeywords) < len(keywords) {
-			if err := saveKeywords("keywords.txt", validKeywords); err != nil {
-				log.Printf("⚠️ 更新 keywords.txt 失败: %v", err)
-			} else {
-				log.Printf("✅ 已更新 keywords.txt，删除了 %d 个无效关键词", len(keywords)-len(validKeywords))
-			}
 		}
 
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
