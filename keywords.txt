@@ -1,45 +1,8 @@
 # 订阅链接关键词配置文件
 # 每行一个关键词，程序会按顺序采集
 # 以 # 开头的行为注释
-getsub.php
-jmssub.net
-jjsubmarines.com
 sub987.top
 m7r52rosihxm.com
 wode.hcl2025.dpdns.org
 whtjdasha.com
-hongxingyun10.vip
-198790.xyz
-nekocloud.top
-yunjnet.com
-sub-gongyi.pages.dev
-prosubnet02.eu
-ghelper.me
-nextvpn.xyz
-bajie.info
-bajie.xyz
-buahfancha.com
-avelloh.top
-020318.xyz
-hutaod.com
-mojie.app
-easyinternet.one
-glados-config.com
-dashiba.com
-louwangzhiyu.online
-momobaby.org
-mofeiyun.com
-myvipnet.com
-9kqw1xbnu.shop
-reen.com
-sunglow.cfd
-yydzx.xyz
-1010991.xyz
-kuaifei.net
-atlantisfly.com
-573193.xyz
-lobonet.cn
-tdwj.net
-su7.me
-fightingly.org
 
