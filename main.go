@@ -24,7 +24,7 @@ const (
 	GitHubAPIBaseURL = "https://api.github.com"
 	MaxRetries       = 5
 	RetryDelay       = 3 * time.Second
-	SearchInterval   = 3 * time.Second
+	SearchInterval   = 15 * time.Second // 避免429限流
 )
 
 var linkPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
@@ -620,34 +620,6 @@ func appendValidLinksToFile(newLinks []string) error {
 	return writer.Flush()
 }
 
-func removeKeywords(filename string, toRemove []string) {
-	removeSet := make(map[string]bool)
-	for _, k := range toRemove {
-		removeSet[k] = true
-	}
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		log.Printf("读取 %s 失败: %v", filename, err)
-		return
-	}
-
-	var kept []string
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			kept = append(kept, line)
-			continue
-		}
-		if !removeSet[trimmed] {
-			kept = append(kept, line)
-		}
-	}
-
-	if err := os.WriteFile(filename, []byte(strings.Join(kept, "\n")), 0644); err != nil {
-		log.Printf("写入 %s 失败: %v", filename, err)
-	}
-}
-
 func testNodesFromFile() {
 	if len(os.Args) < 3 {
 		fmt.Println("用法: go run . test-nodes <节点文件>")
@@ -756,8 +728,7 @@ func main() {
 		bgWg.Wait()
 
 		if len(failedKeywords) > 0 {
-			removeKeywords("keywords.txt", failedKeywords)
-			log.Printf("🗑️ 已从 keywords.txt 中移除 %d 个失效关键词: %v", len(failedKeywords), failedKeywords)
+			log.Printf("⚠️ 以下 %d 个关键词本次未搜索到结果: %v", len(failedKeywords), failedKeywords)
 		}
 
 		log.Println("========== 所有关键词采集并测速打包任务完成 ==========")
