@@ -156,7 +156,10 @@ func (c *Collector) PreFilterLinks(links []string) []string {
 
 func (c *Collector) SearchKeywordLinks(keyword string) ([]string, error) {
 	log.Printf("正在 GitHub 搜索关键词: %s", keyword)
-	searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(keyword))
+	// 只搜索近半年内有更新的仓库
+	sixMonthsAgo := time.Now().AddDate(0, -6, 0).Format("2006-01-02")
+	query := fmt.Sprintf("%s pushed:>%s", keyword, sixMonthsAgo)
+	searchURL := fmt.Sprintf("%s/search/code?q=%s&per_page=100", GitHubAPIBaseURL, url.QueryEscape(query))
 	var results GitHubSearchResult
 	if err := c.makeRequest(searchURL, &results); err != nil {
 		return nil, fmt.Errorf("搜索失败: %v", err)
