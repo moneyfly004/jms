@@ -1,5 +1,5 @@
 name: 自动采集节点
-on:
+于:
   schedule:
     - cron: '0 2 * * *' # 每天 UTC 02:00 (北京 10:00)
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '30' }}
-          TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '8' }}
+          TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '20' }}
           USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
           SINGBOX_PATH: ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
         run: |
