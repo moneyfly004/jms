@@ -166,11 +166,21 @@ func (c *Collector) createSingBoxConfig(nodeLink string, listenPort int) (string
 	switch node.Type {
 	case "ss":
 		outbound = map[string]interface{}{
-			"type":         "shadowsocks",
+			"type":        "shadowsocks",
 			"server":      node.Server,
 			"server_port": node.Port,
 			"method":      node.Cipher,
 			"password":    node.Password,
+		}
+		if node.Plugin != "" {
+			pluginName := node.Plugin
+			if pluginName == "obfs" {
+				pluginName = "obfs-local"
+			}
+			outbound["plugin"] = pluginName
+			if node.PluginOpts != "" {
+				outbound["plugin_opts"] = node.PluginOpts
+			}
 		}
 	case "ssr":
 		outbound = map[string]interface{}{

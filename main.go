@@ -389,7 +389,30 @@ func convertProxyToLink(proxy map[string]interface{}, isClash bool) string {
 		pass := getStr(proxy, "password")
 		if method != "" && pass != "" {
 			auth := base64.StdEncoding.EncodeToString([]byte(method + ":" + pass))
-			return fmt.Sprintf("ss://%s@%s:%s#%s", auth, server, port, url.QueryEscape(name))
+			base := fmt.Sprintf("ss://%s@%s:%s", auth, server, port)
+			// 处理 plugin（如 obfs）
+			if plugin := getStr(proxy, "plugin"); plugin != "" {
+				var pluginStr string
+				if plugin == "obfs" {
+					pluginStr = "obfs-local"
+				} else {
+					pluginStr = plugin
+				}
+				if opts, ok := proxy["plugin-opts"].(map[string]interface{}); ok {
+					var parts []string
+					if mode := getStr(opts, "mode"); mode != "" {
+						parts = append(parts, "obfs="+mode)
+					}
+					if host := getStr(opts, "host"); host != "" {
+						parts = append(parts, "obfs-host="+host)
+					}
+					if len(parts) > 0 {
+						pluginStr += ";" + strings.Join(parts, ";")
+					}
+				}
+				base += "?plugin=" + url.QueryEscape(pluginStr)
+			}
+			return base + "#" + url.QueryEscape(name)
 		}
 	case "vmess":
 		uuid := getStr(proxy, "uuid")
