@@ -1,11 +1,9 @@
 # 订阅链接关键词配置文件
 # 每行一个关键词，程序会按顺序采集
 # 以 # 开头的行为注释
+jjsubmarines.com
+jmssub.net
 portablesubmarines.com
-glados-config.com/subscribe
-glados-config.com/mihomo
-glados-config.com/clash
-glados-config.com/sfa
 jmssub.net/members/getsub.php
 sub987.top
 m7r52rosihxm.com
