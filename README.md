@@ -244,6 +244,7 @@ https://raw.githubusercontent.com/<user>/<repo>/main/nodes.txt
 |------|-----------|
 | `未找到 mihomo 内核` | 确认 `./mihomo/mihomo`（Linux）或 `./mihomo/mihomo.exe`（Windows）存在；Windows 本地缺内核时运行 `scripts/download-mihomo.ps1` |
 | Actions 里报 `cannot execute binary file` | 提交的内核不是 Linux 版，重新运行 `./scripts/download-mihomo.sh --force` 后提交 |
+| `git push` 直连 github.com 超时 / `Connection was reset` | git 不会自动读取 Windows 系统代理，需要手动指定：`git config http.proxy http://127.0.0.1:5564`（端口改成你自己代理客户端的混合端口），推送大文件时尤其需要 |
 | 仓库 Actions 页面为空 | `.github/workflows/*.yml` 没有提交，或需要在 Actions 页面点击 **Enable Actions** |
 | 搜索接口返回 403 | 配置 `GH_PAT`（`public_repo` 权限）；代码搜索本身限流为每分钟 10 次 |
 | 所有节点都测速失败 | 检查运行环境能否直连外网；CI runner 在海外，本地网络环境可能不同 |
