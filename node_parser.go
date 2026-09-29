@@ -10,44 +10,49 @@ import (
 )
 
 type ProxyNode struct {
-	Name     string
-	Type     string
-	Server   string
-	Port     int
-	UUID     string
-	Password string
-	Cipher   string
-	Network  string
-	TLS      bool
-	Insecure bool
-	UDP      bool
-	Protocol      string
-	ProtocolParam string
-	Obfs          string
-	ObfsParam     string
-	Auth         string
-	ObfsPassword string
-	PrivateKey   string
-	PublicKey    string
-	Reserved     string
-	Token        string
-	SNI          string
-	ALPN         string
-	Flow         string
-	Security     string
-	AlterID      int
+	Name             string
+	Type             string
+	Server           string
+	Port             int
+	UUID             string
+	Password         string
+	Username         string
+	Cipher           string
+	Network          string
+	TLS              bool
+	Insecure         bool
+	UDP              bool
+	Protocol         string
+	ProtocolParam    string
+	Obfs             string
+	ObfsParam        string
+	Auth             string
+	ObfsPassword     string
+	PrivateKey       string
+	PublicKey        string
+	PreSharedKey     string
+	Address          string
+	Reserved         string
+	Token            string
+	SNI              string
+	ALPN             string
+	Flow             string
+	Up               string
+	Down             string
+	Security         string
+	AlterID          int
 	RealityPublicKey string
 	RealityShortID   string
 	Fingerprint      string
-	ServiceName string
-	WSHost      string
-	WSPath      string
-	Plugin      string
-	PluginOpts  string
-	AnyTLSVersion string
-	AnyTLSPadding string
-	GOSTProtocol string
-	GOSTPath     string
+	ServiceName      string
+	WSHost           string
+	WSPath           string
+	Plugin           string
+	PluginOpts       string
+	AnyTLSVersion    string
+	AnyTLSPadding    string
+	GOSTProtocol     string
+	GOSTPath         string
 }
 
 func ParseNodeLink(link string) (*ProxyNode, error) {
@@ -264,9 +269,7 @@ func parseTrojan(link string) (*ProxyNode, error) {
 }
 
 func parseShadowsocks(link string) (*ProxyNode, error) {
-	if decodedLink, err := url.QueryUnescape(link); err == nil {
-		link = decodedLink
-	}
+	link = queryUnescapeKeepPlus(link)
 	var method, password string
 	remark := getFragmentFromLink(link)
 
@@ -353,16 +356,11 @@ func parseShadowsocks(link string) (*ProxyNode, error) {
 
 func parseSSR(link string) (*ProxyNode, error) {
 	encoded := strings.TrimPrefix(link, "ssr://")
-	if decoded, err := url.QueryUnescape(encoded); err == nil {
-		encoded = decoded
-	}
+	encoded = queryUnescapeKeepPlus(encoded)
 
-	decodedBytes, err := base64.URLEncoding.DecodeString(encoded)
+	decodedBytes, err := decodeBase64Loose(encoded)
 	if err != nil {
-		decodedBytes, err = base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, fmt.Errorf("SSR Base64 解码失败: %v", err)
-		}
+		return nil, fmt.Errorf("SSR Base64 解码失败: %v", err)
 	}
 
 	decodedStr := string(decodedBytes)
@@ -384,10 +382,7 @@ func parseSSR(link string) (*ProxyNode, error) {
 	obfs := mainParts[4]
 	passwordBase64 := strings.Join(mainParts[5:], ":")
 
-	pwDecoded, err := base64.URLEncoding.DecodeString(passwordBase64)
-	if err != nil {
-		pwDecoded, _ = base64.StdEncoding.DecodeString(passwordBase64)
-	}
+	pwDecoded, _ := decodeBase64Loose(passwordBase64)
 	password := string(pwDecoded)
 
 	node := &ProxyNode{
@@ -405,17 +400,17 @@ func parseSSR(link string) (*ProxyNode, error) {
 		if parsedParams, err := url.Parse("?" + paramsPart); err == nil {
 			query := parsedParams.Query()
 			if v := query.Get("obfsparam"); v != "" {
-				if dec, _ := base64.URLEncoding.DecodeString(v); len(dec) > 0 {
+				if dec, err := decodeBase64Loose(v); err == nil && len(dec) > 0 {
 					node.ObfsParam = string(dec)
 				}
 			}
 			if v := query.Get("protoparam"); v != "" {
-				if dec, _ := base64.URLEncoding.DecodeString(v); len(dec) > 0 {
+				if dec, err := decodeBase64Loose(v); err == nil && len(dec) > 0 {
 					node.ProtocolParam = string(dec)
 				}
 			}
 			if v := query.Get("remarks"); v != "" {
-				if dec, _ := base64.URLEncoding.DecodeString(v); len(dec) > 0 {
+				if dec, err := decodeBase64Loose(v); err == nil && len(dec) > 0 {
 					remarks = string(dec)
 				}
 			}
@@ -436,15 +431,35 @@ func parseHysteria(link string) (*ProxyNode, error) {
 		return nil, err
 	}
 	port := getPort(parsed)
-	return &ProxyNode{
-		Name:         getFragment(parsed, fmt.Sprintf("Hysteria-%s:%d", parsed.Hostname(), port)),
-		Type:         "hysteria",
-		Server:       parsed.Hostname(),
-		Port:         port,
-		Auth:         parsed.Query().Get("auth"),
-		ObfsPassword: parsed.Query().Get("obfs"),
-		UDP:          true,
-	}, nil
+	query := parsed.Query()
+
+	node := &ProxyNode{
+		Name:   getFragment(parsed, fmt.Sprintf("Hysteria-%s:%d", parsed.Hostname(), port)),
+		Type:   "hysteria",
+		Server: parsed.Hostname(),
+		Port:   port,
+		UDP:    true,
+	}
+
+	if parsed.User != nil {
+		node.Auth = parsed.User.Username()
+	}
+	if auth := queryGetFirst(query, "auth", "auth-str", "auth_str"); auth != "" {
+		node.Auth = auth
+	}
+
+	node.ObfsPassword = queryGetFirst(query, "obfs", "obfs-password", "obfsParam")
+	node.Protocol = query.Get("protocol")
+	node.SNI = queryGetFirst(query, "sni", "peer", "host")
+	node.ALPN = query.Get("alpn")
+	node.Up = parseBandwidth(queryGetFirst(query, "upmbps", "up"), "Mbps")
+	node.Down = parseBandwidth(queryGetFirst(query, "downmbps", "down"), "Mbps")
+
+	// Hysteria v1 几乎全部使用自签证书，未显式声明时按跳过证书校验处理
+	node.Insecure = true
+	parseCommonURLParams(node, query)
+
+	return node, nil
 }
 
 func parseHysteria2(link string) (*ProxyNode, error) {
@@ -452,7 +467,12 @@ func parseHysteria2(link string) (*ProxyNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	query := parsed.Query()
+
 	password := parsed.User.Username()
+	if password == "" {
+		password = queryGetFirst(query, "password", "auth", "auth-str")
+	}
 	if password == "" {
 		return nil, fmt.Errorf("缺少密码")
 	}
@@ -467,12 +487,12 @@ func parseHysteria2(link string) (*ProxyNode, error) {
 		UDP:      true,
 	}
 
-	query := parsed.Query()
 	parseCommonURLParams(node, query)
 
-	if obfs := query.Get("obfs"); obfs != "" {
-		node.ObfsPassword = obfs
-	}
+	node.Obfs = query.Get("obfs")
+	node.ObfsPassword = queryGetFirst(query, "obfs-password", "obfsParam")
+	node.Up = parseBandwidth(queryGetFirst(query, "upmbps", "up"), "Mbps")
+	node.Down = parseBandwidth(queryGetFirst(query, "downmbps", "down"), "Mbps")
 
 	node.TLS = !node.Insecure
 	return node, nil
@@ -488,16 +508,19 @@ func parseWireGuard(link string) (*ProxyNode, error) {
 		return nil, fmt.Errorf("缺少私钥")
 	}
 
+	query := parsed.Query()
 	port := getPort(parsed)
 	return &ProxyNode{
-		Name:       getFragment(parsed, fmt.Sprintf("WireGuard-%s:%d", parsed.Hostname(), port)),
-		Type:       "wireguard",
-		Server:     parsed.Hostname(),
-		Port:       port,
-		PrivateKey: privateKey,
-		PublicKey:  parsed.Query().Get("publickey"),
-		Reserved:   parsed.Query().Get("reserved"),
-		UDP:        true,
+		Name:         getFragment(parsed, fmt.Sprintf("WireGuard-%s:%d", parsed.Hostname(), port)),
+		Type:         "wireguard",
+		Server:       parsed.Hostname(),
+		Port:         port,
+		PrivateKey:   restoreBase64Plus(privateKey),
+		PublicKey:    restoreBase64Plus(queryGetFirst(query, "publickey", "public-key", "pubkey")),
+		PreSharedKey: restoreBase64Plus(queryGetFirst(query, "presharedkey", "pre-shared-key", "psk")),
+		Address:      queryGetFirst(query, "address", "ip", "local-address"),
+		Reserved:     query.Get("reserved"),
+		UDP:          true,
 	}, nil
 }
 
@@ -541,10 +564,11 @@ func parseHTTP(link string) (*ProxyNode, error) {
 		Type:   "http",
 		Server: parsed.Hostname(),
 		Port:   port,
+		TLS:    parsed.Scheme == "https",
 	}
 
 	if parsed.User != nil {
-		node.Password = parsed.User.Username()
+		node.Username = parsed.User.Username()
 		if pwd, ok := parsed.User.Password(); ok {
 			node.Password = pwd
 		}
@@ -572,7 +596,7 @@ func parseSOCKS(link string) (*ProxyNode, error) {
 	}
 
 	if parsed.User != nil {
-		node.Password = parsed.User.Username()
+		node.Username = parsed.User.Username()
 		if pwd, ok := parsed.User.Password(); ok {
 			node.Password = pwd
 		}
@@ -676,6 +700,35 @@ func parseCommonURLParams(node *ProxyNode, query url.Values) {
 	if isQueryTrue(query, "insecure", "allowInsecure", "allow_insecure") {
 		node.Insecure = true
 	}
+	parseTransportParams(node, query)
+}
+
+// parseTransportParams 解析 type/network 及其 ws / grpc / h2 相关参数。
+func parseTransportParams(node *ProxyNode, query url.Values) {
+	if network := queryGetFirst(query, "type", "network"); network != "" && node.Network == "" {
+		node.Network = network
+	}
+
+	switch strings.ToLower(node.Network) {
+	case "ws", "websocket":
+		if path := query.Get("path"); path != "" && node.WSPath == "" {
+			node.WSPath = path
+		}
+		if host := query.Get("host"); host != "" && node.WSHost == "" {
+			node.WSHost = host
+		}
+	case "grpc", "gun":
+		if serviceName := queryGetFirst(query, "serviceName", "service_name"); serviceName != "" && node.ServiceName == "" {
+			node.ServiceName = serviceName
+		}
+	case "h2", "http":
+		if path := query.Get("path"); path != "" && node.WSPath == "" {
+			node.WSPath = path
+		}
+		if host := query.Get("host"); host != "" && node.WSHost == "" {
+			node.WSHost = host
+		}
+	}
 }
 
 func queryGetFirst(query url.Values, keys ...string) string {
@@ -716,6 +769,18 @@ func getPort(parsed *url.URL) int {
 	}
 }
 
+// parseBandwidth 把 hysteria/hysteria2 的裸数字带宽补上单位。
+func parseBandwidth(value, unit string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if _, err := strconv.Atoi(value); err == nil {
+		return value + " " + unit
+	}
+	return value
+}
+
 func safeBase64Decode(s string) (string, error) {
 	clean := strings.Map(func(r rune) rune {
 		switch r {
@@ -739,6 +804,36 @@ func safeBase64Decode(s string) (string, error) {
 		return "", err
 	}
 	return string(decoded), nil
+}
+
+// decodeBase64Loose 宽容地解码 base64：兼容 URL-safe 字母表、缺失的填充，
+// 以及被 url.Query() 把 "+" 转成空格的情况。
+func decodeBase64Loose(s string) ([]byte, error) {
+	clean := strings.NewReplacer("\n", "", "\r", "", " ", "+").Replace(strings.TrimSpace(s))
+	clean = strings.NewReplacer("-", "+", "_", "/").Replace(clean)
+	clean = strings.TrimRight(clean, "=")
+	if pad := len(clean) % 4; pad != 0 {
+		clean += strings.Repeat("=", 4-pad)
+	}
+	return base64.StdEncoding.DecodeString(clean)
+}
+
+// restoreBase64Plus 还原被 query 解析成空格的 base64 "+"。
+func restoreBase64Plus(s string) string {
+	return strings.ReplaceAll(strings.TrimSpace(s), " ", "+")
+}
+
+// queryUnescapeKeepPlus 做 URL 解码但保留原始的 "+"，
+// 避免把 base64 里的 "+" 误解码成空格。
+func queryUnescapeKeepPlus(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	decoded, err := url.QueryUnescape(strings.ReplaceAll(s, "+", "%2B"))
+	if err != nil {
+		return s
+	}
+	return decoded
 }
 
 func getString(m map[string]interface{}, key, defaultValue string) string {

@@ -1,0 +1,63 @@
+name: 构建与测试
+
+on:
+  push:
+    paths-ignore:
+      - 'nodes.txt'
+      - 'links.txt'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIHOMO_VERSION: v1.19.31
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Go 环境
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 下载 Go 依赖
+        run: go mod download
+
+      - name: 准备 mihomo 内核（Linux amd64）
+        run: |
+          # 仓库内已内置 Linux 版内核；万一缺失就现场下载
+          if [ ! -f ./mihomo/mihomo ]; then
+            echo "仓库内未包含 mihomo 内核，改为在线下载"
+            chmod +x ./scripts/download-mihomo.sh
+            ./scripts/download-mihomo.sh "${MIHOMO_VERSION}"
+          fi
+          chmod +x ./mihomo/mihomo
+          file ./mihomo/mihomo || true
+          ./mihomo/mihomo -v
+
+      - name: 检查格式
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: 编译
+        run: go build ./...
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 测试（含 mihomo 内核配置校验与端到端代理测试）
+        run: go test -v ./...

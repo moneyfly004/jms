@@ -2,6 +2,15 @@
 # nodes.txt  # 注释掉，让 GitHub Actions 可以提交这个文件
 *.log
 
+# mihomo 内核
+#   /mihomo/mihomo     -> Linux amd64 版，入库，供 GitHub Actions 使用
+#   /mihomo/mihomo.exe -> Windows 版，仅本地调试用，不入库
+/mihomo/*
+!/mihomo/mihomo
+
+# 旧的 sing-box 内核目录（已停用，仅用于忽略历史残留）
+/sing-box-*/
+
 # 编译文件
 jms-collector
 jms-collector.exe
@@ -15,4 +24,3 @@ jms-collector.exe
 .vscode/
 *.swp
 *.swo
-

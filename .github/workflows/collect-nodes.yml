@@ -1,109 +1,137 @@
 name: 自动采集节点
+
 on:
   schedule:
-    - cron: '0 2 * * *' # 每天 UTC 02:00 (北京 10:00)
+    - cron: '0 2 * * *' # 每天 UTC 02:00（北京时间 10:00）
   workflow_dispatch:
+    inputs:
+      max_concurrency:
+        description: '并发测速数量'
+        required: false
+        default: '30'
+      test_timeout:
+        description: '单节点测速超时（秒）'
+        required: false
+        default: '8'
+
+# 同一时刻只跑一个采集任务，避免两个任务互相覆盖 nodes.txt
+concurrency:
+  group: collect-nodes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  MIHOMO_VERSION: v1.19.31
 
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      contents: write
+    timeout-minutes: 180
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-
-      - name: 缓存 Go 模块
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
 
       - name: 设置 Go 环境
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
+          cache: true
 
-      - name: 检查 Sing-box 内核
-        if: env.USE_SINGBOX != 'false'
+      - name: 下载 Go 依赖
+        run: go mod download
+
+      - name: 准备 mihomo 内核（Linux amd64）
         run: |
-          echo "🔍 检查 sing-box 内核文件..."
-          if [ -f "./sing-box-1.10.0-alpha.29-linux-amd64/sing-box" ]; then
-            chmod +x ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
-            echo "✅ 找到本地 sing-box 内核"
-            ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box version
-          else
-            echo "⚠️ 未找到本地内核，尝试下载..."
-            SINGBOX_VERSION="1.10.0-alpha.29"
-            ARCH="amd64"
-            DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz"
-            curl -L -o sing-box.tar.gz "${DOWNLOAD_URL}"
-            tar -xzf sing-box.tar.gz
-            chmod +x sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box
-            echo "✅ sing-box 下载完成"
+          # 仓库内已内置 Linux 版内核；万一缺失就现场下载
+          if [ ! -f ./mihomo/mihomo ]; then
+            echo "仓库内未包含 mihomo 内核，改为在线下载"
+            chmod +x ./scripts/download-mihomo.sh
+            ./scripts/download-mihomo.sh "${MIHOMO_VERSION}"
           fi
-        env:
-          USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
+          chmod +x ./mihomo/mihomo
+          # 明确校验：必须是 Linux ELF，避免误用 Windows 内核
+          file ./mihomo/mihomo || true
+          ./mihomo/mihomo -v
 
       - name: 运行采集程序
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 优先使用自建 PAT（可选），否则退回 Actions 自动提供的 GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          MAX_CONCURRENCY: ${{ secrets.MAX_CONCURRENCY || '30' }}
-          TEST_TIMEOUT: ${{ secrets.TEST_TIMEOUT || '8' }}
-          USE_SINGBOX: ${{ secrets.USE_SINGBOX || 'true' }}
-          SINGBOX_PATH: ./sing-box-1.10.0-alpha.29-linux-amd64/sing-box
-        run: |
-          go run main.go node_parser.go gist.go singbox.go
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN || secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          MAX_CONCURRENCY: ${{ inputs.max_concurrency || secrets.MAX_CONCURRENCY || '30' }}
+          TEST_TIMEOUT: ${{ inputs.test_timeout || secrets.TEST_TIMEOUT || '8' }}
+          TEST_COUNT: ${{ secrets.TEST_COUNT || '1' }}
+          MIHOMO_PATH: ./mihomo/mihomo
+        run: go run .
+
+      - name: 保存本次采集结果为构建产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collected-nodes
+          path: |
+            nodes.txt
+            links.txt
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: 提交并推送结果
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: success()
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
 
           link_count=0
           node_count=0
           removed_kw=""
 
           if [ -f links.txt ]; then
-            link_count=$(wc -l < links.txt | tr -d ' ')
+            link_count=$(grep -c . links.txt || true)
             git add links.txt
           fi
 
           if [ -f nodes.txt ]; then
-            node_count=$(base64 -d < nodes.txt 2>/dev/null | grep -c . || echo "0")
+            node_count=$(base64 -d < nodes.txt 2>/dev/null | grep -c . || true)
+            node_count=${node_count:-0}
             git add nodes.txt
           fi
 
           if [ -f keywords.txt ]; then
             git add keywords.txt
-            removed_kw=$(git diff --staged --unified=0 keywords.txt 2>/dev/null | grep '^-[^-]' | sed 's/^-//' | grep -v '^#' | tr '\n' ',' | sed 's/,$//')
+            removed_kw=$(git diff --staged --unified=0 keywords.txt 2>/dev/null \
+              | grep '^-[^-]' | sed 's/^-//' | grep -v '^#' | tr '\n' ',' | sed 's/,$//' || true)
           fi
 
           if git diff --staged --quiet; then
             echo "无更新，跳过提交"
           else
-            commit_msg="自动更新节点列表 [$(date +'%Y-%m-%d %H:%M')]"
-            parts=""
-            [ "$link_count" -gt 0 ] && parts="links: ${link_count}"
-            [ "$node_count" -gt 0 ] && parts="${parts:+$parts, }nodes: ${node_count}"
-            [ -n "$removed_kw" ] && parts="${parts:+$parts, }removed: [${removed_kw}]"
-            [ -n "$parts" ] && commit_msg="$commit_msg - $parts"
+            commit_msg="自动更新节点列表 [$(date -u +'%Y-%m-%d %H:%M UTC')] - links: ${link_count}, nodes: ${node_count}"
+            [ -n "$removed_kw" ] && commit_msg="${commit_msg}, removed: [${removed_kw}]"
 
             git commit -m "$commit_msg"
-            git pull --rebase origin main || git pull origin main
-            git push origin main
-            echo "✅ 推送完成 | $commit_msg"
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "✅ 推送完成 | ${commit_msg}"
           fi
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo "## 采集结果"
+            echo ""
+            echo "- 关键词文件: \`keywords.txt\`（$(grep -vc '^#' keywords.txt 2>/dev/null || echo 0) 个关键词）"
+            if [ -f links.txt ]; then
+              echo "- 订阅链接: $(grep -c . links.txt || true) 条"
+            fi
+            if [ -f nodes.txt ]; then
+              echo "- 可用节点: $(base64 -d < nodes.txt 2>/dev/null | grep -c . || true) 个"
+            fi
+            echo "- mihomo 内核: ${MIHOMO_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"

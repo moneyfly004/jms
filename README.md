@@ -1,6 +1,11 @@
 # JMS 节点采集器
 
-自动化采集 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 关键词的代码资源，提取订阅链接，解析节点并进行测速，最终保存可用节点。
+自动化采集 GitHub 上包含 `jmssub.net` / `jjsubmarines.com` 等关键词的代码资源，提取订阅链接，
+解析节点并使用 **mihomo 内核**真实代理测速，最终只保存可用节点。
+
+- **代理内核**： [mihomo](https://github.com/MetaCubeX/mihomo)（原 Clash.Meta），不再使用 sing-box
+- **测速方式**： 生成最小 mihomo 配置 → 启动内核 → 通过 mixed-port 真实请求测速（不是纯 TCP 连通性）
+- **自动化**： GitHub Actions 每天定时采集并自动提交 `nodes.txt`
 
 ## 📡 订阅地址
 
@@ -13,555 +18,246 @@ https://gist.githubusercontent.com/moneyfly004/e2b2b5f89928dcb48a62d6394504a324/
 ```
 https://gist.githubusercontent.com/moneyfly004/fa0e0bfff22b50d9ca9d92b82ebe2f7c/raw/sub.txt
 ```
-https://gist.githubusercontent.com/moneyfly1/73a34355ea99f43d02d7916771d336d5/raw/all.yaml
 ```
+https://gist.githubusercontent.com/moneyfly1/73a34355ea99f43d02d7916771d336d5/raw/all.yaml
 https://gist.githubusercontent.com/moneyfly1/73a34355ea99f43d02d7916771d336d5/raw/base64.txt
 ```
 
-将这些地址添加到你的代理客户端（Clash、V2Ray、Shadowsocks 等）即可自动获取最新节点。
+`nodes.txt` 的内容是 Base64 编码的节点链接（每行一个），可直接作为订阅地址使用。
+
+## 📁 项目结构
+
+```
+.
+├── main.go                 # 入口：搜索关键词 → 提取链接 → 解析节点 → 测速 → 落盘/Gist
+├── node_parser.go          # 各类分享链接（ss/vmess/vless/trojan/hysteria2/tuic/...）解析器
+├── mihomo.go               # mihomo 内核：配置生成、启动、代理测速
+├── gist.go                 # 推送结果到 GitHub Gist
+├── mihomo_test.go          # 测试：用真实 mihomo 内核校验生成的配置 + 端到端代理测试
+├── links.txt / nodes.txt   # 采集结果（nodes.txt 为 Base64）
+├── keywords.txt            # 搜索关键词，一行一个，`#` 开头为注释
+├── mihomo/mihomo           # 内置的 Linux amd64 内核（GitHub Actions 使用）
+├── scripts/                # 内核下载脚本 + 推送辅助脚本
+└── .github/workflows/      # GitHub Actions 工作流
+```
 
 ## 🚀 快速开始
 
-### 最简单的使用方式（不需要 GitHub Token）
+### 1. 准备 Go 环境
 
-```bash
-cd jms采集
-go run main.go config.go node_parser.go gist.go
+需要 Go **1.24+**（`go.mod` 中声明）。
+
+### 2. 准备 mihomo 内核
+
+仓库里**内置了 GitHub Actions 真正使用的 Linux amd64 内核**：
+
+```
+mihomo/
+├── mihomo       # Linux amd64（入库，GitHub Actions 使用）
+└── mihomo.exe   # Windows amd64（不入库，仅本地调试用）
 ```
 
-程序会自动：
-1. 搜索 GitHub 上包含 `jmssub.net` 和 `jjsubmarines.com` 的代码
-2. 提取订阅链接
-3. 解析节点并测试连通性
-4. 保存可用节点到 `nodes.txt`
+因此在 Linux 上可以直接运行；只有在 **Windows 本地调试**时才需要额外下载对应平台的内核：
 
-### 使用 GitHub Token（推荐，更快）
+```powershell
+# Windows：下载 mihomo.exe 到 .\mihomo\
+pwsh -File .\scripts\download-mihomo.ps1
 
-```bash
-export GITHUB_TOKEN=your_token_here
-go run main.go config.go node_parser.go gist.go
+# 已存在时跳过，需要升级/覆盖加 -Force
+pwsh -File .\scripts\download-mihomo.ps1 -Force
 ```
 
-### 推送到 GitHub 仓库
-
 ```bash
-export GITHUB_TOKEN=your_token_here
-export GITHUB_REPO=your_username/your_repo
-go run main.go config.go node_parser.go gist.go
+# Linux / macOS：仓库里已有 Linux 版则会跳过，缺失或需要升级时才真正下载
+chmod +x ./scripts/download-mihomo.sh
+./scripts/download-mihomo.sh              # 默认 v1.19.31
+./scripts/download-mihomo.sh v1.19.31     # 指定版本
+./scripts/download-mihomo.sh --force      # 强制重新下载
 ```
 
-### 编译为可执行文件
+内核定位规则：`MIHOMO_PATH` 环境变量 → `./mihomo/mihomo`（Windows 为 `mihomo.exe`）→ `PATH`。
+
+> ⚠️ 内核与平台必须匹配：Windows 的 `mihomo.exe` 不能在 Linux 的 GitHub Actions 上运行，
+> 反之亦然。工作流里用 `file ./mihomo/mihomo` + `mihomo -v` 做了显式校验。
+
+### 3. 运行
 
 ```bash
-go build -o jms-collector main.go config.go node_parser.go gist.go
+go run .
+```
+
+只测试节点文件、不采集：
+
+```bash
+go run . test-nodes nodes-decoded.txt
+```
+
+### 4. 编译为可执行文件
+
+```bash
+go build -o jms-collector .
 ./jms-collector
 ```
 
-## 功能特性
-
-- 🔍 **GitHub 代码搜索**: 自动搜索包含目标关键词的代码
-- 🔗 **链接提取**: 从搜索结果中提取订阅链接
-- 📦 **节点解析**: 解析 base64 编码的订阅内容，提取 ss、vmess、vless、trojan、ssr 节点
-- ⚡ **节点测速**: 对节点进行 TCP 连通性测试
-- 💾 **结果保存**: 默认只保存测试通过的节点
-- 🚀 **GitHub 推送**: 可选地将结果推送到 GitHub 仓库或 Gist
-
-## 使用方法
-
-### 基本使用（不需要 GitHub Token）
-
-```bash
-cd jms采集
-go run main.go config.go node_parser.go gist.go
-```
-
-程序会：
-1. 使用 GitHub 公开 API 搜索代码（有速率限制，每分钟 10 次）
-2. 提取订阅链接
-3. 解析并测试节点
-4. 保存结果到 `nodes.txt`
-
-### 使用 GitHub Token（推荐）
-
-使用 GitHub Token 可以获得更高的 API 速率限制（每分钟 5000 次）。
-
-```bash
-export GITHUB_TOKEN=your_github_token
-go run main.go config.go node_parser.go gist.go
-```
-
-### 推送到 GitHub 仓库
-
-如果你想将结果自动推送到 GitHub 仓库：
-
-```bash
-export GITHUB_TOKEN=your_github_token
-export GITHUB_REPO=your_username/your_repo
-go run main.go config.go node_parser.go gist.go
-```
-
-程序会将 `nodes.txt` 推送到指定仓库的根目录。
-
-### 高级配置
-
-```bash
-# 设置并发数（默认 10）
-export MAX_CONCURRENCY=20
-
-# 设置节点测试超时时间（秒，默认 10）
-export TEST_TIMEOUT=10
-
-# 是否保存所有节点（包括测试失败的），默认 false（只保存测试通过的）
-export SAVE_ALL_NODES=false
-
-# 完整示例
-export GITHUB_TOKEN=your_token
-export GITHUB_REPO=username/repo
-export MAX_CONCURRENCY=20
-export TEST_TIMEOUT=10
-export SAVE_ALL_NODES=false
-go run main.go config.go node_parser.go gist.go
-```
-
-## 环境变量说明
+## ⚙️ 环境变量
 
 | 变量名 | 说明 | 必需 | 默认值 |
 |--------|------|------|--------|
-| `GITHUB_TOKEN` | GitHub Personal Access Token | 否 | - |
-| `GITHUB_REPO` | GitHub 仓库（格式: owner/repo） | 否 | - |
-| `GIST_ID` | GitHub Gist ID（用于更新现有 Gist） | 否 | - |
-| `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 否 | 使用 `GITHUB_TOKEN` |
-| `MAX_CONCURRENCY` | 最大并发数 | 否 | 10 |
-| `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | 10 |
-| `SAVE_ALL_NODES` | 是否保存所有节点（包括测试失败的） | 否 | false |
+| `GITHUB_TOKEN` | GitHub Token（搜索代码、推送 Gist） | 否 | - |
+| `GIST_ID` | GitHub Gist ID（设置后更新同一个 Gist） | 否 | - |
+| `GIST_TOKEN` | 推送 Gist 用的 Token | 否 | 回退到 `GITHUB_TOKEN` |
+| `MIHOMO_PATH` | mihomo 内核可执行文件路径 | 否 | 自动探测 `./mihomo/mihomo` |
+| `MAX_CONCURRENCY` | 并发测速数量 | 否 | `30` |
+| `TEST_TIMEOUT` | 单节点测速超时（秒） | 否 | `15` |
+| `TEST_COUNT` | 每个节点重复测速次数（1~3） | 否 | `1` |
+| `TEST_URL` | 自定义测速目标地址 | 否 | 内置多个地址轮询 |
+| `TEST_SPEED` | 预留：是否测速带宽 | 否 | `false` |
 
-## 获取 GitHub Token
+## 🤖 GitHub Actions 自动化
 
-1. 访问 https://github.com/settings/tokens
-2. 点击 "Generate new token (classic)"
-3. 选择权限：
-   - `public_repo` (如果需要搜索和推送)
-   - `repo` (如果需要推送到私有仓库)
-   - `gist` (如果需要创建/更新 Gist)
-4. 生成并复制 token
+### 1. 把改动推送到 GitHub
 
-**注意**: 即使不提供 token，程序也可以运行，但会受到 GitHub API 的速率限制。
+工作流文件位于仓库的 `.github/workflows/` 目录下，**必须提交到 GitHub 才会生效**：
 
-## 输出文件
+| 文件 | 作用 |
+|------|------|
+| `.github/workflows/collect-nodes.yml` | 每天 UTC 02:00（北京 10:00）自动采集节点并提交 `nodes.txt` |
+| `.github/workflows/build.yml` | 每次 push / PR 自动编译、静态检查、跑测试 |
 
-程序会在当前目录生成 `nodes.txt` 文件，每行一个节点链接，格式如下：
+本次迁移已经删除了仓库里的 sing-box 内核目录，请在提交时**一并提交这些删除**，否则 GitHub 上仍会保留旧内核。
 
+如果本地目录没有 `.git`（例如是下载 ZIP 解压得到的），可以用仓库自带的脚本一步完成：
+
+```powershell
+pwsh -File .\scripts\push-to-github.ps1 -WhatIfOnly   # 先预览会做什么
+pwsh -File .\scripts\push-to-github.ps1               # 真正推送
 ```
-ss://YWVzLTI1Ni1nY206YzVUYzNGN1c0NFdjQmRFREA5Ni40NS4xODguMzM6MTUxMzA#JMS-1268850@c83s1.portablesubmarines.com:15130
-vmess://eyJwcyI6IkpNUy0xMjY4ODUwQGM4M3MzLnBvcnRhYmxlc3VibWFyaW5lcy5jb206MTUxMzAiLCJwb3J0IjoiMTUxMzAiLCJpZCI6ImRkZjg4ZjQxLWMyM2UtNDZhMC04MGZhLTA2MmJiOTBiYzg0OCIsImFpZCI6MCwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJ0bHMiOiJub25lIiwiYWRkIjoiMTk4LjM1LjQ3LjI3In0
-...
-```
 
-## 仓库设置指南
+脚本会 `git fetch` 远程历史，再把本地改动挂到远程分支之上（不会丢失 GitHub 上的历史），
+最后生成一个可 fast-forward 的提交并推送。
 
-### 1. 推送代码到 GitHub
-
-由于认证问题，你需要使用以下方式之一来推送代码：
-
-#### 方式一：使用 Personal Access Token（推荐）
+手动推送的命令：
 
 ```bash
-# 使用 token 作为密码推送
-git push -u origin main
-# 用户名输入：你的 GitHub 用户名
-# 密码输入：你的 GitHub Personal Access Token
+git add -A
+git commit -m "feat: 迁移到 mihomo 内核并添加 GitHub Actions 工作流"
+git push origin main
 ```
 
-#### 方式二：使用 SSH
+> ⚠️ 如果 `.github/workflows/` 没有提交，仓库的 **Actions** 页面就是空的。
+> 另外首次使用时需要在该页面点击 **Enable Actions** 手动启用。
+
+### 2. 配置 Secrets
+
+仓库 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+
+| Secret 名称 | 必需 | 说明 |
+|------------|------|------|
+| `GH_PAT` | 可选（推荐） | 个人 PAT，用于代码搜索 / 推送 Gist。不配置时自动回退到 `GITHUB_TOKEN` |
+| `GIST_ID` | 可选 | 已有的 Gist ID，配置后每次更新同一个 Gist，订阅地址保持不变 |
+| `GIST_TOKEN` | 可选 | 推送 Gist 用的 Token，回退到 `GH_PAT` / `GITHUB_TOKEN` |
+| `MAX_CONCURRENCY` | 可选 | 覆盖默认并发数 |
+| `TEST_TIMEOUT` | 可选 | 覆盖默认测速超时 |
+| `TEST_COUNT` | 可选 | 覆盖默认重复测速次数 |
+
+**PAT 所需权限**（Settings → Developer settings → Personal access tokens）：
+
+- `public_repo` — 搜索公开代码、推送代码
+- `repo` — 如果仓库是私有的
+- `gist` — 创建 / 更新 Gist
+
+> `GITHUB_TOKEN` 是 Actions 自动提供的，**无需手动创建**，但它对代码搜索 API 的权限有限；
+> 如果日志里出现搜索 403，请配置 `GH_PAT`。
+
+### 3. 手动触发
+
+**Actions** → **自动采集节点** → **Run workflow**，可临时指定并发数与超时。
+
+### 4. 工作流做了什么
+
+1. 检出代码，安装 Go（版本取自 `go.mod`）
+2. 准备 **Linux amd64** 版 mihomo 内核（仓库里已有则直接用，缺失才在线下载）
+3. 执行 `go run .`：搜索关键词 → 解析节点 → mihomo 真实代理测速
+4. 把 `nodes.txt` / `links.txt` 上传为构建产物（保留 7 天）
+5. 有变化时自动提交并推送到当前分支
+6. 在运行摘要中输出关键词数、链接数与可用节点数
+
+## 🔍 支持的节点协议
+
+mihomo 测速支持下列协议，全部由 `mihomo -t` 在测试中校验过：
+
+`ss`（含 `obfs` / `v2ray-plugin` / `shadow-tls` / `restls` 插件）、`ssr`、`vmess`、`vless`（含 REALITY）、
+`trojan`、`hysteria`、`hysteria2`、`tuic`、`wireguard`、`http`/`https`、`socks5`、`anytls`
+
+传输层支持 `tcp` / `ws` / `grpc` / `h2` / `http`。
+
+不支持：`socks4`、`gost`（内核不支持，会被自动跳过）。
+
+## 🧪 测试
 
 ```bash
-# 1. 生成 SSH 密钥（如果还没有）
-ssh-keygen -t ed25519 -C "your_email@example.com"
-
-# 2. 添加 SSH 密钥到 GitHub
-# 复制公钥内容
-cat ~/.ssh/id_ed25519.pub
-
-# 3. 在 GitHub 添加 SSH 密钥
-# Settings → SSH and GPG keys → New SSH key
-
-# 4. 更改远程仓库地址为 SSH
-git remote set-url origin git@github.com:your_username/your_repo.git
-
-# 5. 推送代码
-git push -u origin main
+# 需要先下载 mihomo 内核；没有内核时相关测试自动跳过
+go test -v ./...
 ```
 
-#### 方式三：使用 GitHub CLI
+测试内容：
 
-```bash
-# 安装 GitHub CLI 后
-gh auth login
-git push -u origin main
-```
+- 为每种协议生成 mihomo 配置，并用真实内核执行 `mihomo -t` 校验
+- 端到端跑通「启动内核 → 通过 mixed-port 代理请求 → 得到延迟」
 
-### 2. 配置 GitHub Secrets
+## 🔗 通过 Gist 订阅（适用于私有仓库）
 
-推送代码后，需要在 GitHub 仓库中配置 Secrets：
+### 方式一：GitHub Gist（推荐）
 
-#### 步骤
-
-1. 访问仓库：https://github.com/your_username/your_repo
-2. 点击 **Settings** → **Secrets and variables** → **Actions**
-3. 点击 **New repository secret** 添加以下 Secrets：
-
-#### 必需的 Secret
-
-| Secret 名称 | 说明 | 如何获取 |
-|------------|------|----------|
-| `GITHUB_TOKEN` | GitHub Personal Access Token | 见下方说明 |
-
-#### 可选的 Secret
-
-| Secret 名称 | 说明 | 默认值 |
-|------------|------|--------|
-| `GITHUB_REPO` | 仓库名称 | `your_username/your_repo` |
-| `GIST_ID` | Gist ID（如果设置则更新现有 Gist） | - |
-| `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 使用 `GITHUB_TOKEN` |
-| `MAX_CONCURRENCY` | 最大并发数 | `10` |
-| `TEST_TIMEOUT` | 节点测试超时（秒） | `10` |
-| `SAVE_ALL_NODES` | 是否保存所有节点（包括测试失败的） | `false` |
-
-#### 获取 GitHub Token
-
-1. 访问 https://github.com/settings/tokens
-2. 点击 **Generate new token (classic)**
-3. 设置 Token 名称：`jms-collector`
-4. 选择过期时间（建议选择较长时间）
-5. 勾选以下权限：
-   - ✅ `public_repo` - 搜索公开代码
-   - ✅ `repo` - 推送代码到仓库
-   - ✅ `gist` - 创建/更新 Gist（如果使用 Gist 订阅）
-6. 点击 **Generate token**
-7. **重要**：立即复制 token（只显示一次）
-8. 在仓库 Secrets 中添加为 `GITHUB_TOKEN`
-
-### 3. 启用 GitHub Actions
-
-1. 确保代码已推送到 GitHub
-2. 访问仓库的 **Actions** 标签页
-3. 如果提示需要启用 Actions，点击 **Enable Actions**
-4. 工作流会自动在每天 UTC 02:00（北京时间 10:00）运行
-5. 也可以手动触发：**Actions** → **自动采集节点** → **Run workflow**
-
-### 4. 验证自动化
-
-1. 等待第一次自动运行完成，或手动触发一次
-2. 检查 **Actions** 标签页的运行日志
-3. 如果成功，`nodes.txt` 文件会自动更新
-4. 查看提交历史，应该能看到自动提交的记录
-
-## 自动化运行
-
-### 使用 GitHub Actions（推荐）
-
-本项目已配置 GitHub Actions 工作流，可以自动每天采集节点并更新到仓库。
-
-#### 设置步骤
-
-1. **配置 GitHub Secrets**
-
-   在仓库设置中添加以下 Secrets（Settings → Secrets and variables → Actions → New repository secret）：
-
-   | Secret 名称 | 说明 | 必需 | 示例值 |
-   |------------|------|------|--------|
-   | `GITHUB_TOKEN` | GitHub Personal Access Token（用于搜索和推送） | 是 | `ghp_xxxxxxxxxxxx` |
-   | `GITHUB_REPO` | 仓库名称（格式: owner/repo） | 否 | `your_username/your_repo` |
-   | `GIST_ID` | Gist ID（用于更新现有 Gist） | 否 | `e2b2b5f89928dcb48a62d6394504a324` |
-   | `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 否 | 使用 `GITHUB_TOKEN` |
-   | `MAX_CONCURRENCY` | 最大并发数 | 否 | `10` |
-   | `TEST_TIMEOUT` | 节点测试超时（秒） | 否 | `10` |
-   | `SAVE_ALL_NODES` | 是否保存所有节点（包括测试失败的） | 否 | `false` |
-
-   **如何获取 GITHUB_TOKEN：**
-   1. 访问 https://github.com/settings/tokens
-   2. 点击 "Generate new token (classic)"
-   3. 选择权限：
-      - `public_repo` (搜索代码)
-      - `repo` (推送代码到仓库)
-      - `gist` (创建/更新 Gist)
-   4. 生成并复制 token
-   5. 在仓库 Settings → Secrets 中添加为 `GITHUB_TOKEN`
-
-2. **启用 GitHub Actions**
-
-   - 工作流文件已创建在 `.github/workflows/collect-nodes.yml`
-   - 默认每天 UTC 时间 02:00（北京时间 10:00）自动运行
-   - 也可以手动触发：Actions → 选择 "自动采集节点" → Run workflow
-
-3. **查看运行结果**
-
-   - 在 Actions 标签页查看运行日志
-   - 采集的节点会自动保存到 `nodes.txt` 文件
-   - 如果有更新，会自动提交并推送到仓库
-
-#### 工作流说明
-
-- **定时触发**: 每天 UTC 02:00 自动运行
-- **手动触发**: 可以在 Actions 页面手动运行
-- **自动提交**: 如果节点有更新，会自动提交并推送
-
-### 使用 cron（Linux/macOS）
-
-```bash
-# 编辑 crontab
-crontab -e
-
-# 添加定时任务（每天凌晨 2 点运行）
-0 2 * * * cd /path/to/goweb/jms采集 && /usr/local/go/bin/go run main.go config.go node_parser.go gist.go >> /path/to/logs/jms_collector.log 2>&1
-```
-
-### 使用 systemd（Linux）
-
-创建服务文件 `/etc/systemd/system/jms-collector.service`:
-
-```ini
-[Unit]
-Description=JMS Node Collector
-After=network.target
-
-[Service]
-Type=oneshot
-User=your_user
-WorkingDirectory=/path/to/goweb/jms采集
-Environment="GITHUB_TOKEN=your_token"
-Environment="GITHUB_REPO=username/repo"
-ExecStart=/usr/local/go/bin/go run main.go config.go node_parser.go gist.go
-
-[Install]
-WantedBy=multi-user.target
-```
-
-创建定时器 `/etc/systemd/system/jms-collector.timer`:
-
-```ini
-[Unit]
-Description=Run JMS Collector Daily
-Requires=jms-collector.service
-
-[Timer]
-OnCalendar=daily
-OnCalendar=02:00
-
-[Install]
-WantedBy=timers.target
-```
-
-启用定时器：
-
-```bash
-sudo systemctl enable jms-collector.timer
-sudo systemctl start jms-collector.timer
-```
-
-## 订阅节点
-
-采集的节点可以通过以下方式订阅：
-
-### 方式一：GitHub Gist（推荐，支持私有仓库）
-
-**为什么使用 Gist？**
-
-- ✅ **完全免费**：GitHub Gist 对所有人免费
-- ✅ **公开访问**：Gist 是公开的，无需认证即可访问
-- ✅ **自动更新**：可以通过 API 自动更新内容
-- ✅ **简单易用**：订阅地址格式简单
-- ✅ **支持私有仓库**：即使仓库是私有的，Gist 也可以公开访问
-
-**设置步骤：**
-
-1. **配置 GitHub Secrets**
-
-   在仓库设置中添加以下 Secrets：
-
-   | Secret 名称 | 说明 | 必需 |
-   |------------|------|------|
-   | `GIST_TOKEN` | GitHub Token（用于创建/更新 Gist） | 是（或使用 `GITHUB_TOKEN`） |
-   | `GIST_ID` | Gist ID（可选，如果设置则更新现有 Gist） | 否 |
-
-   **注意**：如果没有设置 `GIST_ID`，程序会自动创建新的 Gist，并在日志中显示 Gist ID。
-
-   **获取 GIST_TOKEN：**
-   - `GIST_TOKEN` 可以使用你的 `GITHUB_TOKEN`（如果已经有的话）
-   - 或者单独创建一个只有 `gist` 权限的 Token
-
-2. **运行采集程序**
-
-   配置完成后，GitHub Actions 会自动运行，或者你可以手动触发：
-   - 访问：https://github.com/your_username/your_repo/actions
-   - 选择 "自动采集节点" 工作流
-   - 点击 "Run workflow"
-
-3. **获取订阅地址**
-
-   工作流运行完成后，查看日志，你会看到类似这样的输出：
+1. 配置 `GIST_TOKEN`（或 `GITHUB_TOKEN`），可选配置 `GIST_ID`
+2. 运行采集程序，日志中会输出订阅地址：
 
    ```
    ✅ Gist 已创建，ID: abc123def456...
-   🔗 订阅地址: https://gist.githubusercontent.com/your_username/abc123def456.../raw/nodes.txt
-   🌐 Gist 页面: https://gist.github.com/your_username/abc123def456...
+   🔗 订阅地址: https://gist.githubusercontent.com/<user>/<gist_id>/raw/nodes.txt
    ```
 
-   **订阅地址格式**：
-   ```
-   https://gist.githubusercontent.com/{username}/{gist_id}/raw/nodes.txt
-   ```
+3. 把 `GIST_ID` 加到 Secrets，后续订阅地址保持不变
 
-4. **保存 Gist ID（可选）**
+**Clash / mihomo 客户端中使用：**
 
-   第一次运行后，会显示 Gist ID。你可以：
-   - 在 Secrets 中添加 `GIST_ID` = `abc123def456...`
-   - 这样后续更新会使用同一个 Gist，订阅地址不变
-
-**自动更新：**
-
-配置完成后：
-- 采集工作流每天自动运行
-- 自动更新 Gist 中的节点内容
-- 订阅地址保持不变，始终指向最新的节点
-
-**在客户端中使用：**
-
-**Clash 配置**：
 ```yaml
 proxy-providers:
   jms:
     type: http
-    url: https://gist.githubusercontent.com/your_username/{gist_id}/raw/nodes.txt
+    url: https://gist.githubusercontent.com/<user>/<gist_id>/raw/nodes.txt
     interval: 3600
     path: ./profiles/jms.yaml
 ```
 
-**V2Ray / Shadowsocks**：
-直接在客户端中添加订阅地址：
-```
-https://gist.githubusercontent.com/your_username/{gist_id}/raw/nodes.txt
-```
+### 方式二：仓库 Raw 链接（公开仓库）
 
-### 方式二：GitHub Raw 链接（公开仓库）
-
-如果仓库是公开的，可以直接使用：
 ```
-https://raw.githubusercontent.com/your_username/your_repo/main/nodes.txt
+https://raw.githubusercontent.com/<user>/<repo>/main/nodes.txt
 ```
 
+私有仓库的 Raw 链接需要认证，请优先使用 Gist 方案。
 
-## 私有仓库支持
+## 🛠 故障排除
 
-### GitHub Actions 在私有仓库中运行
+| 现象 | 原因与解决 |
+|------|-----------|
+| `未找到 mihomo 内核` | 确认 `./mihomo/mihomo`（Linux）或 `./mihomo/mihomo.exe`（Windows）存在；Windows 本地缺内核时运行 `scripts/download-mihomo.ps1` |
+| Actions 里报 `cannot execute binary file` | 提交的内核不是 Linux 版，重新运行 `./scripts/download-mihomo.sh --force` 后提交 |
+| 仓库 Actions 页面为空 | `.github/workflows/*.yml` 没有提交，或需要在 Actions 页面点击 **Enable Actions** |
+| 搜索接口返回 403 | 配置 `GH_PAT`（`public_repo` 权限）；代码搜索本身限流为每分钟 10 次 |
+| 所有节点都测速失败 | 检查运行环境能否直连外网；CI runner 在海外，本地网络环境可能不同 |
+| 可用节点数为 0 | 关键词失效或订阅源全部失效，检查 `keywords.txt` 与运行日志 |
+| 推送失败 | 确认工作流有 `permissions: contents: write`，且分支保护未阻止 Actions 推送 |
+| Gist 推送失败 | 确认 Token 有 `gist` 权限 |
 
-**完全支持！** GitHub Actions 可以在私有仓库中正常运行：
+## ⚠️ 注意事项
 
-1. **默认配置即可工作**
-   - GitHub Actions 自动提供的 `GITHUB_TOKEN` 在私有仓库中有完整权限
-   - 无需额外配置即可运行
-
-2. **如果使用自定义 Token**
-   - 确保 Token 有 `repo` 权限（完整仓库访问）
-   - 搜索公开代码需要 `public_repo` 权限
-
-3. **订阅访问**
-   - 私有仓库的 Raw 链接需要认证
-   - **推荐使用 GitHub Gist**（方式一），这是私有仓库的最佳选择
-   - 详细说明见上方"订阅节点"部分
-
-### 私有仓库订阅方案
-
-**当前方案：GitHub Gist**
-
-**工作原理：**
-
-1. **仓库完全私有**
-   - 你的代码仓库保持私有
-   - 任何人都无法看到你的代码
-   - 只有你能访问仓库
-
-2. **节点通过 Gist 公开**
-   - GitHub Actions 自动将节点推送到独立的 Gist
-   - Gist 是公开的，但**只包含节点文件**，不包含代码
-   - 别人只能看到节点列表，看不到你的采集代码
-
-3. **订阅地址**
-   - 格式：`https://gist.githubusercontent.com/{username}/{gist_id}/raw/nodes.txt`
-   - 只有这个地址是公开的
-   - 代码仓库完全隐藏
-
-**隐私保护：**
-
-| 内容 | 可见性 | 说明 |
-|------|--------|------|
-| 代码仓库 | 🔒 私有 | 完全不可见 |
-| 采集代码 | 🔒 私有 | 完全不可见 |
-| 节点列表 | 🌐 公开 | 仅节点文件，不包含代码 |
-| 订阅地址 | 🌐 公开 | 仅用于订阅节点 |
-
-**结论**：你的代码完全隐藏，只有节点列表是公开的（这是订阅必需的）。
-
-## 故障排除
-
-### 问题: 搜索失败，返回 403
-
-**解决方案**: 提供 GitHub Token 或等待速率限制重置
-
-### 问题: 节点解析失败
-
-**解决方案**: 检查订阅链接是否有效，内容是否为 base64 编码
-
-### 问题: 推送失败
-
-**解决方案**: 
-- 确认 GitHub Token 有 `repo` 权限
-- 确认仓库名称格式正确（owner/repo）
-- 确认仓库存在且有写入权限
-
-### 问题: 私有仓库无法访问订阅
-
-**解决方案**:
-- **使用 GitHub Gist**（推荐，见上方"订阅节点"部分）
-- 或运行本地订阅服务器
-
-### 问题: Gist 创建/更新失败
-
-**解决方案**：
-- 检查 `GIST_TOKEN` 或 `GITHUB_TOKEN` 是否正确设置
-- 确认 Token 有 `gist` 权限
-- 查看 Actions 运行日志中的错误信息
-
-### 问题: Gist 节点数量与本地文件不一致
-
-**解决方案**：
-- 检查工作流日志，查看 Gist 推送是否成功
-- 确认 Gist ID 是否正确
-- 查看日志中的节点数量统计
-
-
-### 问题: Actions 运行失败：Token 错误
-
-**解决方案**：
-- 检查 `GITHUB_TOKEN` Secret 是否正确设置
-- 确认 Token 有 `repo` 和 `public_repo` 权限
-- Token 是否已过期
-
-### 问题: Actions 无法推送代码
-
-**解决方案**：
-- 检查工作流的 `permissions` 配置
-- 确认 `GITHUB_TOKEN` 有写入权限
-- 查看 Actions 运行日志中的错误信息
-
-## 注意事项
-
-1. **速率限制**: 不使用 token 时，GitHub API 限制为每分钟 10 次请求
-2. **网络连接**: 节点测速需要网络连接，某些节点可能无法访问
-3. **节点有效性**: 程序只进行基本的 TCP 连通性测试，不保证节点完全可用
-4. **隐私**: 请妥善保管你的 GitHub Token，不要提交到代码仓库
-5. **默认行为**: 程序默认只保存测试通过的节点，测试失败的节点不会被保存
-6. **Gist 公开**: Gist 必须是公开的（public），才能作为订阅地址
+1. **Token 安全**：不要把自己的 Token 提交到仓库，一律使用 Secrets
+2. **速率限制**：无 Token 时 GitHub 代码搜索限制为每分钟 10 次请求
+3. **采集耗时**：关键词之间会间隔 15 秒以避免限流，全量采集可能耗时较久
+4. **内核与平台**：仓库内置 Linux amd64 版内核供 Actions 使用；Windows 版 `mihomo.exe` 不入库，仅本地调试时下载
+5. **仅测连通性**：测速只验证「通过该节点能否访问测试地址」，不代表节点长期稳定
 
 ## 许可证
 

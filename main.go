@@ -243,8 +243,8 @@ func (c *Collector) ProcessKeywordLinks(keyword string, links []string) bool {
 		go func() {
 			defer testWg.Done()
 			for nodeLink := range nodeCh {
-				// 强制仅使用 Sing-box 测速
-				validNode := c.TestNodeWithSingBox(nodeLink)
+				// 强制仅使用 mihomo 内核测速
+				validNode := c.TestNodeWithMihomo(nodeLink)
 				if validNode != nil && validNode.Error == nil {
 					validNodeCh <- validNode
 				}
@@ -671,7 +671,7 @@ func testNodesFromFile() {
 		wg.Add(1)
 		go func(index int, link string) {
 			defer wg.Done()
-			validNode := collector.TestNodeWithSingBox(link)
+			validNode := collector.TestNodeWithMihomo(link)
 			mu.Lock()
 			results[index] = validNode
 			mu.Unlock()
