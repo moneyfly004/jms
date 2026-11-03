@@ -1,3 +1,2 @@
 https://abc.xhonor.top:9066/ssp/mce/link/LszNOJJRSnVgZVkS?sub=3
 https://abc.xhonor.top:9066/v2b/qz/api/v1/client/subscribe?token=b5137fc5a4861fe3dbd150757653f654
-https://abc.xhonor.top:9066/v2b/qy/api/v1/client/subscribe?token=6f6b77ff75133c2ef92f2405c17f9b14
